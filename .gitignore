@@ -1,0 +1,15 @@
+# File di sistema e strumenti
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+
+# Artefatti di test e output locali
+test-output.pdf
+test-import.json
+pdf-crop.png
+*.log
