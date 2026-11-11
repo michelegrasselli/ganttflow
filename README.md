@@ -58,16 +58,25 @@ base al tipo scelto:
 | **Inizia con** | mantiene sempre la stessa distanza tra le date di inizio delle due attività | giorni tra i due inizi |
 | **Finisce prima** | termina prima della fine dell'attività collegata | giorni prima della fine |
 
-Le date calcolate vengono bloccate (lucchetto accanto al campo): in **Finisce prima**
-si blocca la data di fine, negli altri casi la data di inizio. Per sbloccarle scegli
-`—` nel selettore. I successori si aggiornano automaticamente a catena e le
-combinazioni che creerebbero un ciclo vengono rifiutate.
+Le date calcolate vengono bloccate (lucchetto accanto al campo): per **Inizia dopo** e
+**Inizia con** si blocca la data di inizio, per **Finisce prima** entrambe le date
+(la fine è calcolata e l'inizio ne deriva). Per sbloccarle scegli `—` nel selettore.
+I successori si aggiornano automaticamente a catena e le combinazioni che creerebbero
+un ciclo vengono rifiutate.
 
 ### Colori
 
 Ogni attività ha un colore scelto da una palette di 14 tonalità preimpostate: fai clic
 sul quadratino colorato nella colonna **Colore** e seleziona la tinta desiderata.
 Il colore viene usato nella barra del Gantt e nel PDF.
+
+### Weekend e festivi
+
+Nel calendario i **sabati e le domeniche** sono evidenziati in **arancione**, mentre i
+**festivi italiani** (Natale, Pasqua e Lunedì dell'Angelo, Ferragosto, Immacolata,
+Ognissanti, Capodanno, Epifania, Liberazione, Festa dei Lavoratori, Festa della
+Repubblica, Santo Stefano) sono in **rosso**, con il nome nel tooltip. La stessa
+legenda è riportata a piè di pagina nel PDF.
 
 ### Scorciatoie
 

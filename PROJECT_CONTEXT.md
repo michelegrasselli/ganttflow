@@ -47,7 +47,8 @@ reimportabile.
 - Quando cambia una data o la durata di un predecessore, tutti i successori vengono
   ricalcolati a catena in ordine topologico.
 - Le date derivate sono **bloccate** (lucchetto accanto al campo): l'inizio per `FS`
-  e `SS`, la fine per `FF`. Per sbloccarle si sceglie "—" nel selettore.
+  e `SS`, entrambe le date per `FF` (la fine è calcolata e l'inizio ne consegue). Per
+  sbloccarle si sceglie "—" nel selettore.
 - I **cicli** sono impediti: le opzioni che creerebbero un ciclo non sono mostrate
   e un controllo runtime rifiuta comunque il collegamento.
 - I collegamenti sono disegnati come connettori tra le barre: linea continua per `FS`,
