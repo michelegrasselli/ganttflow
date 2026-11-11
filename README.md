@@ -8,8 +8,9 @@ e funziona anche completamente offline.
 
 ## Funzionalità
 
-- **Tabella attività** con nome, durata stimata in giorni, data di inizio e data di fine.
+- **Tabella attività** con nome, durata in giorni considerati, data di inizio e data di fine.
 - **Calcolo bidirezionale**: durata + inizio → fine; inizio + fine → durata.
+- **Giorni considerati** per ogni attività: tre spunte **Sab**, **Dom**, **Fest** (normalmente non spuntate) includono sabati, domeniche e festivi nel conteggio della durata. Se non spuntate, quei giorni vengono saltati.
 - **Diagramma di Gantt** a calendario con mesi e giorni; **sabati e domeniche in arancione**, **festivi italiani in rosso** (Natale, Pasqua, Ferragosto, ecc.) e linea di "oggi".
 - **Colori preimpostati** per ogni attività, scelti da una palette e usati nella barra e nel PDF.
 - **Tre tipi di vincolo** tra attività, con offset in giorni e aggiornamento automatico a catena:
@@ -44,7 +45,30 @@ poi visita `http://localhost:8000/`.
 | inizio + fine | la **durata** viene calcolata |
 | solo durata | la fine viene ricalcolata dall'inizio esistente |
 
-La fine è inclusiva: 5 giorni a partire dal 16 novembre terminano il 20 novembre.
+La fine è inclusiva. La durata conta solo i giorni considerati dall'attività: con
+tutte le spunte vuote, 5 giorni a partire da lunedì 16 novembre terminano venerdì
+20 novembre.
+
+### Giorni considerati (Sab / Dom / Fest)
+
+A destra del colore ogni attività ha tre spunte sovrapposte, **normalmente non
+spuntate**:
+
+| Spunta | Se è attiva | Se è vuota |
+|---|---|---|
+| **Sab** | i sabati contano nella durata | i sabati vengono saltati |
+| **Dom** | le domeniche contano nella durata | le domeniche vengono saltate |
+| **Fest** | i festivi italiani contano nella durata | i festivi vengono saltati |
+
+Esempio: con tutte le spunte vuote, un'attività che inizia **lunedì** e dura **7
+giorni** finisce il **martedì della settimana successiva** (5 giorni feriali + lunedì
+e martedì). Se la data di inizio cade in un giorno escluso, viene spostata avanti al
+primo giorno considerato; se la data di fine cade in un giorno escluso, viene
+arretrata all'ultimo giorno considerato.
+
+Le spunte sono per singola attività: duplicando un'attività vengono copiate, mentre
+le nuove attività partono con tutte le spunte vuote. Le date calcolate dai vincoli
+tengono conto del calendario dell'attività collegata.
 
 ### Collegare le attività
 
@@ -75,8 +99,10 @@ Il colore viene usato nella barra del Gantt e nel PDF.
 Nel calendario i **sabati e le domeniche** sono evidenziati in **arancione**, mentre i
 **festivi italiani** (Natale, Pasqua e Lunedì dell'Angelo, Ferragosto, Immacolata,
 Ognissanti, Capodanno, Epifania, Liberazione, Festa dei Lavoratori, Festa della
-Repubblica, Santo Stefano) sono in **rosso**, con il nome nel tooltip. La stessa
-legenda è riportata a piè di pagina nel PDF.
+Repubblica, Santo Stefano) sono in **rosso**, con il nome nel tooltip. La colorazione
+indica il tipo di giorno; è la spunta **Sab**, **Dom** o **Fest** dell'attività a
+decidere se quel giorno conta nella durata. La legenda è riportata anche a piè di
+pagina nel PDF.
 
 ### Scorciatoie
 
@@ -95,7 +121,7 @@ Il file esportato è JSON e può essere reimportato con il pulsante **Importa**:
 ```json
 {
   "format": "ganttflow-project",
-  "version": 1,
+  "version": 2,
   "exportedAt": "2026-11-10T08:04:57.146Z",
   "project": {
     "name": "Lancio nuovo sito web",
@@ -111,7 +137,10 @@ Il file esportato è JSON e può essere reimportato con il pulsante **Importa**:
         "color": "#6366f1",
         "predecessorId": null,
         "link": "FS",
-        "lag": 0
+        "lag": 0,
+        "countSat": false,
+        "countSun": false,
+        "countHol": false
       }
     ]
   }
@@ -123,6 +152,9 @@ Il file esportato è JSON e può essere reimportato con il pulsante **Importa**:
 - `link` è il tipo di vincolo: `FS` (inizia dopo la fine), `SS` (stessa distanza tra
   gli inizi), `FF` (finisce prima della fine). Se manca, viene assunto `FS`.
 - `lag` è l'offset in giorni rispetto al riferimento del vincolo (0–365).
+- `countSat`, `countSun`, `countHol`: se `true`, sabati, domeniche e festivi contano
+  nella durata; se assenti o `false`, vengono saltati. Nei file precedenti alla
+  versione 2 le spunte sono assenti e quindi i giorni vengono saltati.
 - In importazione i dati vengono validati: id non validi rigenerati, riferimenti
   inesistenti rimossi, durate e lag limitati ai valori ammessi, `link` sconosciuti
   riportati a `FS`.

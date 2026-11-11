@@ -137,6 +137,58 @@
     var wd = dayOfWeek(iso);
     return wd === 0 || wd === 6;
   }
+
+  /* ---------------- giorni considerati nella durata ----------------
+     Le tre spunte (sabati, domeniche, festivi) decidono quali giorni
+     contano nella durata. Se una spunta è assente, quel giorno viene
+     saltato nel calcolo della durata. */
+  function countsDay(iso, t) {
+    if (!t) return true;
+    var wd = dayOfWeek(iso);
+    if (!t.countSat && wd === 6) return false;
+    if (!t.countSun && wd === 0) return false;
+    if (!t.countHol && holidayName(iso)) return false;
+    return true;
+  }
+  function nextCounted(iso, t) {
+    var cur = iso, guard = 0;
+    while (!countsDay(cur, t) && guard++ < 4000) cur = addDays(cur, 1);
+    return cur;
+  }
+  function prevCounted(iso, t) {
+    var cur = iso, guard = 0;
+    while (!countsDay(cur, t) && guard++ < 4000) cur = addDays(cur, -1);
+    return cur;
+  }
+  function endFromStart(start, duration, t) {
+    var cur = nextCounted(start, t);
+    var left = Math.max(1, duration | 0) - 1;
+    var guard = 0;
+    while (left > 0 && guard++ < 20000) {
+      cur = addDays(cur, 1);
+      if (countsDay(cur, t)) left--;
+    }
+    return cur;
+  }
+  function startFromEnd(end, duration, t) {
+    var cur = prevCounted(end, t);
+    var left = Math.max(1, duration | 0) - 1;
+    var guard = 0;
+    while (left > 0 && guard++ < 20000) {
+      cur = addDays(cur, -1);
+      if (countsDay(cur, t)) left--;
+    }
+    return cur;
+  }
+  function countDays(start, end, t) {
+    if (diffDays(start, end) < 0) return 0;
+    var n = 0, cur = start, guard = 0;
+    while (cur <= end && guard++ < 40000) {
+      if (countsDay(cur, t)) n++;
+      cur = addDays(cur, 1);
+    }
+    return n;
+  }
   function fmtLong(iso) {
     var d = parseISO(iso);
     return d ? d.getUTCDate() + ' ' + MONTHS[d.getUTCMonth()] + ' ' + d.getUTCFullYear() : '—';
@@ -219,12 +271,19 @@
       color: nextColor(),
       predecessorId: null,
       link: 'FS',
-      lag: 0
+      lag: 0,
+      countSat: false,
+      countSun: false,
+      countHol: false
     };
     if (partial) Object.keys(partial).forEach(function (k) { if (partial[k] !== undefined) t[k] = partial[k]; });
+    t.countSat = t.countSat === true;
+    t.countSun = t.countSun === true;
+    t.countHol = t.countHol === true;
     if (!isISO(t.start)) t.start = todayISO();
+    t.start = nextCounted(t.start, t);
     t.duration = clampInt(t.duration, 1, MAX_DURATION, 1);
-    if (!isISO(t.end)) t.end = addDays(t.start, t.duration - 1);
+    if (!isISO(t.end)) t.end = endFromStart(t.start, t.duration, t);
     return t;
   }
 
@@ -260,8 +319,11 @@
     list.forEach(function (t) { map[t.id] = t; });
 
     list.forEach(function (t) {
+      t.countSat = t.countSat === true;
+      t.countSun = t.countSun === true;
+      t.countHol = t.countHol === true;
       if (!isISO(t.start)) t.start = todayISO();
-      if (!isISO(t.end)) t.end = addDays(t.start, Math.max(1, t.duration) - 1);
+      if (!isISO(t.end)) t.end = endFromStart(t.start, Math.max(1, t.duration), t);
       t.duration = clampInt(t.duration, 1, MAX_DURATION, 1);
       t.lag = clampInt(t.lag, 0, 365, 0);
       t.link = LINK_TYPES[t.link] ? t.link : 'FS';
@@ -289,17 +351,18 @@
       if (t.predecessorId && map[t.predecessorId]) {
         var p = map[t.predecessorId];
         if (t.link === 'SS') {
-          t.start = addDays(p.start, t.lag);
-          t.end = addDays(t.start, t.duration - 1);
+          t.start = nextCounted(addDays(p.start, t.lag), t);
+          t.end = endFromStart(t.start, t.duration, t);
         } else if (t.link === 'FF') {
-          t.end = addDays(p.end, -(1 + t.lag));
-          t.start = addDays(t.end, -(t.duration - 1));
+          t.end = prevCounted(addDays(p.end, -(1 + t.lag)), t);
+          t.start = startFromEnd(t.end, t.duration, t);
         } else {
-          t.start = addDays(p.end, 1 + t.lag);
-          t.end = addDays(t.start, t.duration - 1);
+          t.start = nextCounted(addDays(p.end, 1 + t.lag), t);
+          t.end = endFromStart(t.start, t.duration, t);
         }
       } else {
-        t.end = addDays(t.start, t.duration - 1);
+        t.start = nextCounted(t.start, t);
+        t.end = endFromStart(t.start, t.duration, t);
       }
     });
   }
@@ -321,22 +384,33 @@
       var id = typeof src.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(src.id) ? src.id : uid();
       while (ids[id]) id = uid();
       ids[id] = true;
-      var start = isISO(src.start) ? src.start : todayISO();
+      var flags = {
+        countSat: src.countSat === true,
+        countSun: src.countSun === true,
+        countHol: src.countHol === true
+      };
+      var start = nextCounted(isISO(src.start) ? src.start : todayISO(), flags);
       var duration = clampInt(src.duration, 1, MAX_DURATION, 0);
-      var end = isISO(src.end) ? src.end : null;
-      if (!duration && end) duration = Math.max(1, diffDays(start, end) + 1);
-      if (!duration) duration = 1;
-      if (end && diffDays(start, end) + 1 !== duration) end = addDays(start, duration - 1);
+      var end = isISO(src.end) ? prevCounted(src.end, flags) : null;
+      if (!duration) {
+        duration = end && diffDays(start, end) >= 0
+          ? Math.max(1, countDays(start, end, flags))
+          : 1;
+      }
+      if (!end || diffDays(start, end) < 0) end = endFromStart(start, duration, flags);
       project.tasks.push({
         id: id,
         name: typeof src.name === 'string' && src.name.trim() ? src.name.trim().slice(0, 120) : 'Attività ' + (i + 1),
         start: start,
-        end: end || addDays(start, duration - 1),
+        end: end,
         duration: duration,
         color: hexColor(src.color) || PALETTE[i % PALETTE.length],
         predecessorId: typeof src.predecessorId === 'string' ? src.predecessorId : null,
         link: LINK_TYPES[src.link] ? src.link : 'FS',
-        lag: clampInt(src.lag, 0, 365, 0)
+        lag: clampInt(src.lag, 0, 365, 0),
+        countSat: flags.countSat,
+        countSun: flags.countSun,
+        countHol: flags.countHol
       });
     });
     var byId = {};
@@ -394,14 +468,17 @@
 
     var head = el('div', 'row row-head');
     var headFields = el('div', 'fields head-fields');
-    var labels = ['Attività', 'Giorni', 'Inizio', 'Fine', 'Vincolo', 'Colore', ''];
-    var classes = ['cell-name', 'cell-dur', 'cell-start', 'cell-end', 'cell-pred', 'cell-color', 'cell-act'];
+    var labels = ['Attività', 'Giorni', 'Inizio', 'Fine', 'Vincolo', 'Colore', 'Includi', ''];
+    var classes = ['cell-name', 'cell-dur', 'cell-start', 'cell-end', 'cell-pred', 'cell-color', 'cell-flags', 'cell-act'];
     labels.forEach(function (label, i) {
       var c = el('div', 'cell ' + classes[i]);
       if (i === 4) {
         c.appendChild(el('span', '', label));
         c.appendChild(el('span', 'head-sub', 'offset (gg)'));
         c.title = 'Collega l’attività a una precedente e scegli il tipo di vincolo. Il numero è l’offset in giorni rispetto al riferimento del vincolo.';
+      } else if (i === 6) {
+        c.textContent = label;
+        c.title = 'Giorni da considerare nella durata: sabati, domeniche e festivi. Se una spunta è assente, quei giorni vengono saltati.';
       } else {
         c.textContent = label;
       }
@@ -460,6 +537,11 @@
             '<span class="swatch-dot"></span>' +
           '</button>' +
           '<div class="swatch-pop" hidden></div>' +
+        '</div>' +
+        '<div class="cell cell-flags">' +
+          '<label class="flag" title="Considera i sabati nella durata: se non spuntato, i sabati vengono saltati"><input type="checkbox" data-field="countSat" aria-label="Considera i sabati nella durata"><span>Sab</span></label>' +
+          '<label class="flag" title="Considera le domeniche nella durata: se non spuntato, le domeniche vengono saltate"><input type="checkbox" data-field="countSun" aria-label="Considera le domeniche nella durata"><span>Dom</span></label>' +
+          '<label class="flag" title="Considera i festivi italiani nella durata: se non spuntato, i festivi vengono saltati"><input type="checkbox" data-field="countHol" aria-label="Considera i festivi nella durata"><span>Fest</span></label>' +
         '</div>' +
         '<div class="cell cell-act">' +
           '<button type="button" class="icon-btn" data-action="duplicate" title="Duplica attività" aria-label="Duplica attività"><svg viewBox="0 0 16 16"><rect x="5.2" y="5.2" width="8" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.4 3.4H5.2a2 2 0 0 0-2 2v5.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>' +
@@ -549,6 +631,11 @@
       if (colorBtn) colorBtn.title = 'Colore ' + t.color + ' — clicca per sceglierne un altro';
       row.querySelectorAll('.swatch').forEach(function (b) {
         b.classList.toggle('on', b.dataset.color === t.color);
+      });
+
+      ['countSat', 'countSun', 'countHol'].forEach(function (f) {
+        var cb = row.querySelector('[data-field="' + f + '"]');
+        if (cb && document.activeElement !== cb) cb.checked = t[f] === true;
       });
 
       var startInput = row.querySelector('[data-field="start"]');
@@ -677,7 +764,8 @@
       var row = rows[t.id];
       if (!row) return;
       var bar = row.querySelector('.bar');
-      var w = Math.max(4, t.duration * px - 2);
+      var span = diffDays(t.start, t.end) + 1;
+      var w = Math.max(4, span * px - 2);
       bar.style.left = (diffDays(range.start, t.start) * px + 1) + 'px';
       bar.style.width = w + 'px';
       bar.style.background = t.color;
@@ -730,9 +818,9 @@
       var p = taskById(t.predecessorId);
       if (!p || idx[p.id] === undefined || idx[t.id] === undefined) return;
       var pStartX = diffDays(range.start, p.start) * px + 1;
-      var pEndX = diffDays(range.start, p.end) * px + Math.max(4, p.duration * px - 2) + 1;
+      var pEndX = (diffDays(range.start, p.end) + 1) * px;
       var tStartX = diffDays(range.start, t.start) * px + 1;
-      var tEndX = diffDays(range.start, t.end) * px + Math.max(4, t.duration * px - 2) + 1;
+      var tEndX = (diffDays(range.start, t.end) + 1) * px;
       var x1 = t.link === 'SS' ? pStartX : pEndX;
       var x2 = t.link === 'FF' ? tEndX : tStartX;
       var y1 = idx[p.id] * ROW_H + ROW_H / 2;
@@ -969,7 +1057,10 @@
       duration: src.duration,
       color: src.color,
       predecessorId: src.id,
-      lag: 0
+      lag: 0,
+      countSat: src.countSat,
+      countSun: src.countSun,
+      countHol: src.countHol
     });
     tasks().splice(indexById(id) + 1, 0, copy);
     state.selectedId = copy.id;
@@ -1044,7 +1135,7 @@
     saveNow();
     var payload = {
       format: 'ganttflow-project',
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       project: state.project
     };
@@ -1204,15 +1295,16 @@
     }
     if (field === 'end') {
       if (!isISO(input.value)) return;
-      var d = diffDays(t.start, input.value) + 1;
+      var end = prevCounted(input.value, t);
+      var d = countDays(t.start, end, t);
       if (d < 1) {
-        toast('La data di fine non può precedere quella di inizio.', { type: 'error' });
+        toast('L’intervallo scelto non contiene giorni considerati: controlla le spunte Sab/Dom/Fest.', { type: 'error' });
         syncRows();
         return;
       }
       if (d > MAX_DURATION) d = MAX_DURATION;
       t.duration = d;
-      t.end = addDays(t.start, d - 1);
+      t.end = endFromStart(t.start, d, t);
       afterEdit();
       return;
     }
@@ -1246,6 +1338,11 @@
     }
     if (field === 'link') {
       t.link = LINK_TYPES[input.value] ? input.value : 'FS';
+      afterEdit();
+      return;
+    }
+    if (field === 'countSat' || field === 'countSun' || field === 'countHol') {
+      t[field] = input.checked === true;
       afterEdit();
       return;
     }

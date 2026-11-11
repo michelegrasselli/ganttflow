@@ -365,7 +365,7 @@ window.GanttPDF = (function () {
       if (pi !== undefined) opsText(ops, COL.after, cy - 2.4, (LINK_LABEL[t.link] || 'dopo') + ' #' + (pi + 1), 7, { color: MUTED, align: 'right' });
 
       var x = tlX + diffDays(data.start, t.start) * colW;
-      var bw = Math.max(1.4, t.duration * colW);
+      var bw = Math.max(1.4, (diffDays(t.start, t.end) + 1) * colW);
       var c = hexRgb(t.color);
       opsRect(ops, x, cy - 4.5, bw, 9, c, [Math.max(0, c[0] - .18), Math.max(0, c[1] - .18), Math.max(0, c[2] - .18)]);
     });
