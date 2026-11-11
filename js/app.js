@@ -15,6 +15,13 @@
   ];
   var ROW_H = 44;
   var PALETTE = ['#6366f1', '#0ea5e9', '#14b8a6', '#22c55e', '#f59e0b', '#f97316', '#ef4444', '#ec4899', '#a855f7', '#64748b'];
+  var SWATCHES = ['#6366f1', '#0ea5e9', '#14b8a6', '#22c55e', '#84cc16', '#eab308', '#f59e0b', '#f97316', '#ef4444', '#ec4899', '#a855f7', '#64748b', '#0f172a', '#94a3b8'];
+  var LINK_TYPES = {
+    FS: { label: 'Inizia dopo', short: 'dopo' },
+    SS: { label: 'Inizia con', short: 'con' },
+    FF: { label: 'Finisce prima', short: 'prima' }
+  };
+  var LINK_ORDER = ['FS', 'SS', 'FF'];
   var STORAGE_KEY = 'ganttflow.project.v1';
   var MAX_TASKS = 500;
   var MAX_DURATION = 3650;
@@ -23,6 +30,18 @@
   var MONTHS = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
   var MONTHS_SHORT = ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
   var IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || '');
+  var FIXED_HOLIDAYS = {
+    '01-01': 'Capodanno',
+    '01-06': 'Epifania',
+    '04-25': 'Festa della Liberazione',
+    '05-01': 'Festa dei Lavoratori',
+    '06-02': 'Festa della Repubblica',
+    '08-15': 'Ferragosto',
+    '11-01': 'Ognissanti',
+    '12-08': 'Immacolata Concezione',
+    '12-25': 'Natale',
+    '12-26': 'Santo Stefano'
+  };
 
   /* --------------------------- stato --------------------------- */
   var state = {
@@ -84,6 +103,39 @@
   function dayOfWeek(iso) {
     var d = parseISO(iso);
     return d ? d.getUTCDay() : 0;
+  }
+
+  /* --------------------- festivi italiani --------------------- */
+  var holidayCache = {};
+  function easterISO(year) {
+    var a = year % 19, b = Math.floor(year / 100), c = year % 100;
+    var d = Math.floor(b / 4), e = b % 4;
+    var f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+    var h = (19 * a + b - d - g + 15) % 30;
+    var i = Math.floor(c / 4), k = c % 4;
+    var l = (32 + 2 * e + 2 * i - h - k) % 7;
+    var m = Math.floor((a + 11 * h + 22 * l) / 451);
+    var month = Math.floor((h + l - 7 * m + 114) / 31);
+    var day = ((h + l - 7 * m + 114) % 31) + 1;
+    return toISO(new Date(Date.UTC(year, month - 1, day)));
+  }
+  function holidaysForYear(year) {
+    if (holidayCache[year]) return holidayCache[year];
+    var map = {};
+    Object.keys(FIXED_HOLIDAYS).forEach(function (md) { map[year + '-' + md] = FIXED_HOLIDAYS[md]; });
+    var easter = easterISO(year);
+    map[easter] = 'Pasqua';
+    map[addDays(easter, 1)] = 'Lunedì dell’Angelo';
+    holidayCache[year] = map;
+    return map;
+  }
+  function holidayName(iso) {
+    if (!isISO(iso)) return null;
+    return holidaysForYear(+iso.slice(0, 4))[iso] || null;
+  }
+  function isWeekend(iso) {
+    var wd = dayOfWeek(iso);
+    return wd === 0 || wd === 6;
   }
   function fmtLong(iso) {
     var d = parseISO(iso);
@@ -166,6 +218,7 @@
       duration: 1,
       color: nextColor(),
       predecessorId: null,
+      link: 'FS',
       lag: 0
     };
     if (partial) Object.keys(partial).forEach(function (k) { if (partial[k] !== undefined) t[k] = partial[k]; });
@@ -211,6 +264,7 @@
       if (!isISO(t.end)) t.end = addDays(t.start, Math.max(1, t.duration) - 1);
       t.duration = clampInt(t.duration, 1, MAX_DURATION, 1);
       t.lag = clampInt(t.lag, 0, 365, 0);
+      t.link = LINK_TYPES[t.link] ? t.link : 'FS';
       t.color = hexColor(t.color) || '#6366f1';
       t.name = typeof t.name === 'string' ? t.name : 'Attività';
       if (t.predecessorId && !map[t.predecessorId]) t.predecessorId = null;
@@ -231,12 +285,22 @@
     list.forEach(function (t) { visit(t, {}); });
 
     order.forEach(function (t) {
+      t.duration = clampInt(t.duration, 1, MAX_DURATION, 1);
       if (t.predecessorId && map[t.predecessorId]) {
         var p = map[t.predecessorId];
-        t.start = addDays(p.end, 1 + t.lag);
+        if (t.link === 'SS') {
+          t.start = addDays(p.start, t.lag);
+          t.end = addDays(t.start, t.duration - 1);
+        } else if (t.link === 'FF') {
+          t.end = addDays(p.end, -(1 + t.lag));
+          t.start = addDays(t.end, -(t.duration - 1));
+        } else {
+          t.start = addDays(p.end, 1 + t.lag);
+          t.end = addDays(t.start, t.duration - 1);
+        }
+      } else {
+        t.end = addDays(t.start, t.duration - 1);
       }
-      t.duration = clampInt(t.duration, 1, MAX_DURATION, 1);
-      t.end = addDays(t.start, t.duration - 1);
     });
   }
 
@@ -271,6 +335,7 @@
         duration: duration,
         color: hexColor(src.color) || PALETTE[i % PALETTE.length],
         predecessorId: typeof src.predecessorId === 'string' ? src.predecessorId : null,
+        link: LINK_TYPES[src.link] ? src.link : 'FS',
         lag: clampInt(src.lag, 0, 365, 0)
       });
     });
@@ -289,13 +354,14 @@
     var dow = dayOfWeek(base);
     var start = addDays(base, (8 - dow) % 7);
     var seed = [
-      ['Brief e ricerca', 5, '#6366f1', null],
-      ['Wireframe UX', 6, '#0ea5e9', 0],
-      ['Design UI', 8, '#a855f7', 1],
-      ['Sviluppo frontend', 12, '#14b8a6', 2],
-      ['Sviluppo backend', 10, '#f59e0b', 2],
-      ['Test e QA', 5, '#ef4444', 3],
-      ['Lancio', 1, '#22c55e', 5]
+      ['Brief e ricerca', 5, '#6366f1', null, 'FS', 0],
+      ['Wireframe UX', 6, '#0ea5e9', 0, 'FS', 0],
+      ['Design UI', 8, '#a855f7', 1, 'SS', 0],
+      ['Sviluppo frontend', 12, '#14b8a6', 2, 'FS', 0],
+      ['Sviluppo backend', 10, '#f59e0b', 3, 'SS', 0],
+      ['Test e QA', 5, '#ef4444', 3, 'FS', 0],
+      ['Lancio', 1, '#22c55e', 5, 'FS', 0],
+      ['Revisione finale', 3, '#ec4899', 6, 'FF', 0]
     ];
     seed.forEach(function (s, i) {
       var t = makeTask({
@@ -303,7 +369,9 @@
         start: start,
         duration: s[1],
         color: s[2],
-        predecessorId: s[3] === null ? null : list[s[3]].id
+        predecessorId: s[3] === null ? null : list[s[3]].id,
+        link: s[4],
+        lag: s[5]
       });
       list.push(t);
     });
@@ -326,11 +394,17 @@
 
     var head = el('div', 'row row-head');
     var headFields = el('div', 'fields head-fields');
-    var labels = ['Attività', 'Giorni', 'Inizio', 'Fine', 'Inizia dopo', 'Colore', ''];
+    var labels = ['Attività', 'Giorni', 'Inizio', 'Fine', 'Vincolo', 'Colore', ''];
     var classes = ['cell-name', 'cell-dur', 'cell-start', 'cell-end', 'cell-pred', 'cell-color', 'cell-act'];
     labels.forEach(function (label, i) {
-      var c = el('div', 'cell ' + classes[i], label);
-      if (i === 4) c.title = 'L’attività parte il giorno dopo la fine di quella scelta';
+      var c = el('div', 'cell ' + classes[i]);
+      if (i === 4) {
+        c.appendChild(el('span', '', label));
+        c.appendChild(el('span', 'head-sub', 'offset (gg)'));
+        c.title = 'Collega l’attività a una precedente e scegli il tipo di vincolo. Il numero è l’offset in giorni rispetto al riferimento del vincolo.';
+      } else {
+        c.textContent = label;
+      }
       headFields.appendChild(c);
     });
     head.appendChild(headFields);
@@ -368,12 +442,25 @@
           '<input class="inp inp-date" data-field="start" type="date" aria-label="Data di inizio">' +
           '<span class="lock" aria-hidden="true"><svg viewBox="0 0 16 16"><rect x="3.2" y="7" width="9.6" height="6.6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0V7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></span>' +
         '</div>' +
-        '<div class="cell cell-end"><input class="inp inp-date" data-field="end" type="date" aria-label="Data di fine"></div>' +
-        '<div class="cell cell-pred">' +
-          '<select class="inp inp-select" data-field="pred" aria-label="Attività precedente"></select>' +
-          '<input class="inp inp-lag" data-field="lag" type="number" min="0" max="365" step="1" title="Sfasamento in giorni" aria-label="Sfasamento in giorni">' +
+        '<div class="cell cell-end">' +
+          '<input class="inp inp-date" data-field="end" type="date" aria-label="Data di fine">' +
+          '<span class="lock" aria-hidden="true"><svg viewBox="0 0 16 16"><rect x="3.2" y="7" width="9.6" height="6.6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0V7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></span>' +
         '</div>' +
-        '<div class="cell cell-color"><input class="inp-color" data-field="color" type="color" aria-label="Colore attività"></div>' +
+        '<div class="cell cell-pred">' +
+          '<div class="link-line">' +
+            '<select class="inp inp-select inp-pred" data-field="pred" aria-label="Attività a cui collegare questa" title="Nessun collegamento"></select>' +
+          '</div>' +
+          '<div class="link-line">' +
+            '<select class="inp inp-select inp-link" data-field="link" aria-label="Tipo di vincolo" title="Tipo di vincolo"></select>' +
+            '<input class="inp inp-lag" data-field="lag" type="number" min="0" max="365" step="1" placeholder="0" title="Offset in giorni" aria-label="Offset in giorni">' +
+          '</div>' +
+        '</div>' +
+        '<div class="cell cell-color">' +
+          '<button type="button" class="swatch-btn" data-action="color" aria-label="Scegli il colore" aria-haspopup="true" title="Scegli un colore">' +
+            '<span class="swatch-dot"></span>' +
+          '</button>' +
+          '<div class="swatch-pop" hidden></div>' +
+        '</div>' +
         '<div class="cell cell-act">' +
           '<button type="button" class="icon-btn" data-action="duplicate" title="Duplica attività" aria-label="Duplica attività"><svg viewBox="0 0 16 16"><rect x="5.2" y="5.2" width="8" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.4 3.4H5.2a2 2 0 0 0-2 2v5.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>' +
           '<button type="button" class="icon-btn danger" data-action="delete" title="Elimina attività" aria-label="Elimina attività"><svg viewBox="0 0 16 16"><path d="M3.4 4.6h9.2M6.2 4.6V3.2h3.6v1.4M4.6 4.6l.6 8.2h5.6l.6-8.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
@@ -382,6 +469,21 @@
       '<div class="timeline"><div class="lane"><div class="bar"></div></div></div>';
     var select = row.querySelector('[data-field="pred"]');
     buildPredOptions(select, t);
+    var linkSel = row.querySelector('[data-field="link"]');
+    LINK_ORDER.forEach(function (k) { linkSel.appendChild(new Option(LINK_TYPES[k].label, k)); });
+    linkSel.value = t.link;
+    var pop = row.querySelector('.swatch-pop');
+    var colors = SWATCHES.slice();
+    if (colors.indexOf(t.color) < 0) colors.unshift(t.color);
+    colors.forEach(function (c) {
+      var b = el('button', 'swatch');
+      b.type = 'button';
+      b.dataset.color = c;
+      b.style.background = c;
+      b.title = c;
+      b.setAttribute('aria-label', 'Colore ' + c);
+      pop.appendChild(b);
+    });
     return row;
   }
 
@@ -418,24 +520,53 @@
       setInput(row.querySelector('[data-field="start"]'), t.start);
       setInput(row.querySelector('[data-field="end"]'), t.end);
       setInput(row.querySelector('[data-field="lag"]'), t.lag);
-      var sel = row.querySelector('[data-field="pred"]');
-      if (document.activeElement !== sel && sel.value !== (t.predecessorId || '')) sel.value = t.predecessorId || '';
+
+      var predSel = row.querySelector('[data-field="pred"]');
+      if (document.activeElement !== predSel && predSel.value !== (t.predecessorId || '')) predSel.value = t.predecessorId || '';
       var predTask = t.predecessorId ? taskById(t.predecessorId) : null;
-      sel.title = predTask ? 'Inizia dopo «' + predTask.name + '»' + (t.lag ? ' (+' + t.lag + ' gg)' : '') : 'Nessun collegamento';
-      var color = row.querySelector('[data-field="color"]');
-      if (color.value !== t.color) color.value = t.color;
+      predSel.title = predTask ? 'Collegata a «' + predTask.name + '»' : 'Nessun collegamento';
+
+      var linkSel = row.querySelector('[data-field="link"]');
+      if (document.activeElement !== linkSel && linkSel.value !== t.link) linkSel.value = t.link;
+      linkSel.disabled = !t.predecessorId;
+      linkSel.title = predTask ? 'Tipo di vincolo con «' + predTask.name + '»' : 'Scegli prima un’attività collegata';
+
+      var lag = row.querySelector('[data-field="lag"]');
+      lag.disabled = !t.predecessorId;
+      if (!t.predecessorId) {
+        lag.title = 'Offset in giorni: disponibile con un collegamento';
+      } else if (t.link === 'SS') {
+        lag.title = 'Offset in giorni tra l’inizio di questa attività e l’inizio di quella collegata';
+      } else if (t.link === 'FF') {
+        lag.title = 'Giorni prima della fine dell’attività collegata in cui questa si conclude';
+      } else {
+        lag.title = 'Giorni di attesa dopo la fine dell’attività collegata';
+      }
+
+      var dot = row.querySelector('.swatch-dot');
+      if (dot) dot.style.background = t.color;
+      var colorBtn = row.querySelector('[data-action="color"]');
+      if (colorBtn) colorBtn.title = 'Colore ' + t.color + ' — clicca per sceglierne un altro';
+      row.querySelectorAll('.swatch').forEach(function (b) {
+        b.classList.toggle('on', b.dataset.color === t.color);
+      });
 
       var startInput = row.querySelector('[data-field="start"]');
-      var locked = !!t.predecessorId;
-      startInput.disabled = locked;
-      startInput.classList.toggle('locked', locked);
-      startInput.title = locked ? 'Data calcolata dalla attività precedente' : '';
-      startInput.closest('.cell-start').classList.toggle('locked', locked);
-      var lag = row.querySelector('[data-field="lag"]');
-      lag.disabled = !locked;
-      lag.style.display = locked ? '' : 'none';
-      lag.title = locked ? 'Sfasamento in giorni rispetto alla fine dell’attività precedente' : 'Sfasamento (disponibile solo con un collegamento)';
-      lag.closest('.cell-pred').title = locked ? 'Inizio calcolato automaticamente' : '';
+      var endInput = row.querySelector('[data-field="end"]');
+      var lockedStart = !!t.predecessorId;
+      var lockedEnd = !!t.predecessorId && t.link === 'FF';
+      var lockTitle = t.link === 'SS'
+        ? 'Data calcolata: mantiene la stessa distanza dall’inizio dell’attività collegata'
+        : (t.link === 'FF'
+          ? 'Data calcolata: finisce prima della fine dell’attività collegata'
+          : 'Data calcolata: inizia dopo la fine dell’attività collegata');
+      [['start', startInput, lockedStart], ['end', endInput, lockedEnd]].forEach(function (pair) {
+        var inp = pair[1];
+        inp.disabled = pair[2];
+        inp.classList.toggle('locked', pair[2]);
+        inp.title = pair[2] ? lockTitle : '';
+        inp.closest(pair[0] === 'start' ? '.cell-start' : '.cell-end').classList.toggle('locked', pair[2]);
+      });
     });
   }
 
@@ -481,6 +612,18 @@
     grid.style.setProperty('--sun', sun);
     grid.style.setProperty('--dayline', px >= 14 ? 'rgba(148, 163, 184, .2)' : 'transparent');
 
+    var stops = ['transparent 0px'];
+    for (var hi = 0; hi < range.days; hi++) {
+      if (!holidayName(addDays(range.start, hi))) continue;
+      var ha = hi * px, hb = (hi + 1) * px;
+      stops.push('transparent ' + ha + 'px');
+      stops.push('rgba(239, 68, 68, .18) ' + ha + 'px');
+      stops.push('rgba(239, 68, 68, .18) ' + hb + 'px');
+      stops.push('transparent ' + hb + 'px');
+    }
+    stops.push('transparent ' + tlW + 'px');
+    grid.style.setProperty('--hol-bg', 'linear-gradient(90deg, ' + stops.join(', ') + ')');
+
     var sig = range.start + '|' + range.end + '|' + state.zoom;
     if (!force && sig === headerSig) return;
     headerSig = sig;
@@ -511,9 +654,12 @@
         var iso = addDays(range.start, i);
         var dd = parseISO(iso);
         var wd = dd.getUTCDay();
-        var cell = el('div', 'day' + (wd === 0 || wd === 6 ? ' we' : '') + (iso === today ? ' is-today' : ''));
+        var hol = holidayName(iso);
+        var cls = 'day' + (isWeekend(iso) ? ' we' : '') + (hol ? ' hol' : '') + (iso === today ? ' is-today' : '');
+        var cell = el('div', cls);
         cell.style.width = px + 'px';
-        if (iso === today) cell.title = 'Oggi';
+        if (hol) cell.title = hol + (iso === today ? ' · Oggi' : '');
+        else if (iso === today) cell.title = 'Oggi';
         cell.appendChild(el('span', 'dnum', String(dd.getUTCDate())));
         if (px >= 18) cell.appendChild(el('span', 'dw', WD[wd]));
         days.appendChild(cell);
@@ -544,7 +690,7 @@
       var pred = t.predecessorId ? taskById(t.predecessorId) : null;
       bar.title = (t.name || 'Senza nome') + '\n' + fmtLong(t.start) + ' → ' + fmtLong(t.end) +
         '  (' + t.duration + (t.duration === 1 ? ' giorno' : ' giorni') + ')' +
-        (pred ? '\nDopo: ' + pred.name + (t.lag ? ' (+' + t.lag + ' gg)' : '') : '');
+        (pred ? '\n' + LINK_TYPES[t.link].label + ': ' + pred.name + (t.lag ? ' (offset ' + t.lag + ' gg)' : '') : '');
     });
   }
 
@@ -583,14 +729,24 @@
       if (!t.predecessorId) return;
       var p = taskById(t.predecessorId);
       if (!p || idx[p.id] === undefined || idx[t.id] === undefined) return;
-      var x1 = diffDays(range.start, p.start) * px + Math.max(4, p.duration * px - 2) + 1;
-      var x2 = diffDays(range.start, t.start) * px + 1;
+      var pStartX = diffDays(range.start, p.start) * px + 1;
+      var pEndX = diffDays(range.start, p.end) * px + Math.max(4, p.duration * px - 2) + 1;
+      var tStartX = diffDays(range.start, t.start) * px + 1;
+      var tEndX = diffDays(range.start, t.end) * px + Math.max(4, t.duration * px - 2) + 1;
+      var x1 = t.link === 'SS' ? pStartX : pEndX;
+      var x2 = t.link === 'FF' ? tEndX : tStartX;
       var y1 = idx[p.id] * ROW_H + ROW_H / 2;
       var y2 = idx[t.id] * ROW_H + ROW_H / 2;
-      var gap = x2 - x1;
-      if (gap < 0) return;
-      var mid = x1 + Math.max(6, Math.min(14, gap / 2));
-      out += '<path d="M' + x1 + ' ' + y1 + ' H' + mid + ' V' + y2 + ' H' + x2 + '" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"></path>';
+      var dash = t.link === 'SS' ? ' stroke-dasharray="4 3"' : (t.link === 'FF' ? ' stroke-dasharray="2 3"' : '');
+      var d;
+      if (x2 - x1 >= 8) {
+        var mid = x1 + Math.max(6, Math.min(14, (x2 - x1) / 2));
+        d = 'M' + x1 + ' ' + y1 + ' H' + mid + ' V' + y2 + ' H' + x2;
+      } else {
+        var back = Math.max(2, Math.min(x1, x2) - 12);
+        d = 'M' + x1 + ' ' + y1 + ' H' + back + ' V' + y2 + ' H' + x2;
+      }
+      out += '<path d="' + d + '" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"' + dash + '></path>';
       out += '<path d="M' + x2 + ' ' + y2 + ' l-7 -3.4 v6.8 z" fill="#94a3b8"></path>';
     });
     linksSvg.innerHTML = out;
@@ -1066,13 +1222,6 @@
       afterEdit();
       return;
     }
-    if (field === 'color') {
-      if (hexColor(input.value)) {
-        t.color = input.value;
-        renderBars();
-        saveSoon();
-      }
-    }
   }
 
   function onGridChange(e) {
@@ -1095,6 +1244,11 @@
       afterEdit();
       return;
     }
+    if (field === 'link') {
+      t.link = LINK_TYPES[input.value] ? input.value : 'FS';
+      afterEdit();
+      return;
+    }
     if (field === 'duration') {
       var dur = parseInt(input.value, 10);
       if (!Number.isFinite(dur) || dur < 1) syncRows();
@@ -1103,6 +1257,26 @@
     if (field === 'end') {
       if (!isISO(input.value)) syncRows();
       return;
+    }
+  }
+
+  function closeColorPops(except) {
+    grid.querySelectorAll('.swatch-pop').forEach(function (p) {
+      if (p !== except) p.hidden = true;
+    });
+  }
+
+  function toggleColorPop(row) {
+    var pop = row.querySelector('.swatch-pop');
+    if (!pop) return;
+    var willOpen = pop.hidden;
+    closeColorPops(null);
+    pop.hidden = !willOpen;
+    if (willOpen) {
+      pop.classList.remove('up');
+      var br = board.getBoundingClientRect();
+      var pr = pop.getBoundingClientRect();
+      if (pr.bottom > br.bottom - 6) pop.classList.add('up');
     }
   }
 
@@ -1115,6 +1289,20 @@
       if (!row) return;
       if (action === 'delete') deleteTask(row.dataset.id);
       else if (action === 'duplicate') duplicateTask(row.dataset.id);
+      else if (action === 'color') toggleColorPop(row);
+      return;
+    }
+    var swatch = e.target.closest('.swatch');
+    if (swatch) {
+      var swRow = swatch.closest('.row.task');
+      var swTask = swRow ? taskById(swRow.dataset.id) : null;
+      if (swTask && hexColor(swatch.dataset.color)) {
+        swTask.color = swatch.dataset.color;
+        closeColorPops(null);
+        renderBars();
+        syncRows();
+        saveSoon();
+      }
       return;
     }
     var bar = e.target.closest('.bar');
@@ -1182,8 +1370,12 @@
     modalOkEl.addEventListener('click', function () { closeModal(true); });
     modalCancelEl.addEventListener('click', function () { closeModal(false); });
     modalEl.addEventListener('mousedown', function (e) { if (e.target === modalEl) closeModal(false); });
+    document.addEventListener('click', function (e) {
+      if (!e.target.closest('.cell-color')) closeColorPops(null);
+    });
     document.addEventListener('keydown', function (e) {
       if (!modalEl.hidden && e.key === 'Escape') { e.preventDefault(); closeModal(false); return; }
+      if (e.key === 'Escape') closeColorPops(null);
       if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 's') {
         e.preventDefault();
         exportJSON();

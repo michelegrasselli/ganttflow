@@ -6,19 +6,19 @@ esportazione PDF e file di progetto reimportabile.
 App statica, **senza dipendenze e senza build**: si apre `index.html` nel browser
 e funziona anche completamente offline.
 
-![GanttFlow](docs/screenshot.jpg)
-
 ## Funzionalità
 
 - **Tabella attività** con nome, durata stimata in giorni, data di inizio e data di fine.
 - **Calcolo bidirezionale**: durata + inizio → fine; inizio + fine → durata.
-- **Diagramma di Gantt** a calendario con mesi, giorni, weekend evidenziati e linea di "oggi".
-- **Colore personalizzato** per ogni attività, usato nella barra e nel PDF.
-- **Dipendenze finish-to-start**: un'attività può iniziare il giorno dopo la fine di un'altra,
-  con sfasamento opzionale (0–365 giorni). I successori si aggiornano automaticamente a catena.
+- **Diagramma di Gantt** a calendario con mesi e giorni; **sabati e domeniche in arancione**, **festivi italiani in rosso** (Natale, Pasqua, Ferragosto, ecc.) e linea di "oggi".
+- **Colori preimpostati** per ogni attività, scelti da una palette e usati nella barra e nel PDF.
+- **Tre tipi di vincolo** tra attività, con offset in giorni e aggiornamento automatico a catena:
+  - **Inizia dopo**: parte il giorno dopo la fine dell'attività collegata;
+  - **Inizia con**: mantiene sempre la stessa distanza tra le date di inizio delle due attività;
+  - **Finisce prima**: termina prima della fine dell'attività collegata.
 - **Prevenzione dei cicli**: le combinazioni non valide non sono selezionabili.
 - **Zoom** a 4 livelli, pulsante "Oggi", indicatore del mese visibile.
-- **Esportazione PDF** A4 orizzontale, multipagina, con tabella e barre colorate.
+- **Esportazione PDF** A4 orizzontale, multipagina, con tabella, tipo di vincolo e barre colorate.
 - **Esportazione/Importazione progetto JSON** per riprendere il lavoro in un secondo momento.
 - **Salvataggio automatico** nel browser (`localStorage`).
 - Aggiunta, duplicazione, eliminazione con annullamento, progetto di esempio.
@@ -48,10 +48,26 @@ La fine è inclusiva: 5 giorni a partire dal 16 novembre terminano il 20 novembr
 
 ### Collegare le attività
 
-Nel campo **Inizia dopo** scegli l'attività precedente. Il successore partirà il
-giorno dopo la fine della precedente. Il campo **Inizio** diventa bloccato perché
-calcolato; per sbloccarlo scegli `—`. Il campo numerico accanto al selettore imposta
-un eventuale sfasamento in giorni.
+Nella colonna **Vincolo** scegli prima l'attività a cui collegarti, poi il tipo di
+vincolo. Il numero accanto è l'**offset in giorni** (0–365) e cambia significato in
+base al tipo scelto:
+
+| Tipo | Significato | Offset |
+|---|---|---|
+| **Inizia dopo** | parte il giorno dopo la fine dell'attività collegata | giorni di attesa dopo la fine |
+| **Inizia con** | mantiene sempre la stessa distanza tra le date di inizio delle due attività | giorni tra i due inizi |
+| **Finisce prima** | termina prima della fine dell'attività collegata | giorni prima della fine |
+
+Le date calcolate vengono bloccate (lucchetto accanto al campo): in **Finisce prima**
+si blocca la data di fine, negli altri casi la data di inizio. Per sbloccarle scegli
+`—` nel selettore. I successori si aggiornano automaticamente a catena e le
+combinazioni che creerebbero un ciclo vengono rifiutate.
+
+### Colori
+
+Ogni attività ha un colore scelto da una palette di 14 tonalità preimpostate: fai clic
+sul quadratino colorato nella colonna **Colore** e seleziona la tinta desiderata.
+Il colore viene usato nella barra del Gantt e nel PDF.
 
 ### Scorciatoie
 
@@ -85,6 +101,7 @@ Il file esportato è JSON e può essere reimportato con il pulsante **Importa**:
         "duration": 5,
         "color": "#6366f1",
         "predecessorId": null,
+        "link": "FS",
         "lag": 0
       }
     ]
@@ -94,17 +111,22 @@ Il file esportato è JSON e può essere reimportato con il pulsante **Importa**:
 
 - Le date usano il formato `YYYY-MM-DD` e sono giorni di calendario inclusivi.
 - `predecessorId` è `null` o l'id di un'altra attività dello stesso progetto.
-- `lag` è lo sfasamento in giorni dopo la fine del predecessore.
+- `link` è il tipo di vincolo: `FS` (inizia dopo la fine), `SS` (stessa distanza tra
+  gli inizi), `FF` (finisce prima della fine). Se manca, viene assunto `FS`.
+- `lag` è l'offset in giorni rispetto al riferimento del vincolo (0–365).
 - In importazione i dati vengono validati: id non validi rigenerati, riferimenti
-  inesistenti rimossi, durate e lag limitati ai valori ammessi.
+  inesistenti rimossi, durate e lag limitati ai valori ammessi, `link` sconosciuti
+  riportati a `FS`.
 
 ## Note sul PDF
 
 Il PDF è generato interamente in JavaScript (`js/pdf.js`), senza librerie esterne.
 È un PDF vettoriale con testo selezionabile: contiene l'intestazione del progetto,
-la tabella delle attività (numero, nome, giorni, inizio, fine, attività precedente)
-e le barre sul calendario, con paginazione automatica quando le attività superano
-lo spazio disponibile (circa 30 righe per pagina, formato A4 orizzontale).
+la tabella delle attività (numero, nome, giorni, inizio, fine, colonna **Vincolo**
+con tipo e numero dell'attività collegata) e le barre sul calendario, con paginazione
+automatica quando le attività superano lo spazio disponibile (circa 30 righe per
+pagina, formato A4 orizzontale). Nel calendario i fine settimana sono evidenziati in
+arancione e i festivi italiani in rosso, con legenda a piè di pagina.
 
 ## Struttura del progetto
 
@@ -115,7 +137,6 @@ js/app.js           logica: modello, date, dipendenze, rendering, storage, impor
 js/pdf.js           generatore PDF autonomo
 assets/favicon.svg  logo e favicon
 PROJECT_CONTEXT.md  contesto, requisiti e decisioni del progetto
-docs/               immagini per la documentazione
 ```
 
 ## Compatibilità

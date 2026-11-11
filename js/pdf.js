@@ -16,11 +16,11 @@ window.GanttPDF = (function () {
   var COL = {
     no: 32,
     name: 54,
-    nameW: 190,
-    durRight: 272,
-    start: 298,
-    end: 358,
-    after: 416,
+    nameW: 176,
+    durRight: 258,
+    start: 282,
+    end: 340,
+    after: 406,
     timeline: 424
   };
   var TL_W = PAGE_W - M - COL.timeline;
@@ -29,6 +29,14 @@ window.GanttPDF = (function () {
   var FAINT = [0.82, 0.85, 0.9];
   var ACCENT = [0.31, 0.27, 0.9];
   var TODAY = [0.88, 0.11, 0.28];
+  var WEEKEND_FILL = [0.996, 0.925, 0.875];
+  var HOLIDAY_FILL = [0.988, 0.868, 0.868];
+  var LINK_LABEL = { FS: 'dopo', SS: 'con', FF: 'prima' };
+  var FIXED_HOLIDAYS = {
+    '01-01': 'Capodanno', '01-06': 'Epifania', '04-25': 'Liberazione', '05-01': 'Lavoratori',
+    '06-02': 'Repubblica', '08-15': 'Ferragosto', '11-01': 'Ognissanti', '12-08': 'Immacolata',
+    '12-25': 'Natale', '12-26': 'Santo Stefano'
+  };
   var MONTHS = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
   var MONTHS_SHORT = ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
   var DAY = 86400000;
@@ -77,6 +85,35 @@ window.GanttPDF = (function () {
   function fmtNumShort(iso) {
     var d = parseISO(iso);
     return d ? pad2(d.getUTCDate()) + '/' + pad2(d.getUTCMonth() + 1) + '/' + String(d.getUTCFullYear()).slice(2) : '—';
+  }
+
+  /* ------------------------- festivi italiani ------------------------- */
+  var holidayCache = {};
+  function easterISO(year) {
+    var a = year % 19, b = Math.floor(year / 100), c = year % 100;
+    var d = Math.floor(b / 4), e = b % 4;
+    var f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+    var h = (19 * a + b - d - g + 15) % 30;
+    var i = Math.floor(c / 4), k = c % 4;
+    var l = (32 + 2 * e + 2 * i - h - k) % 7;
+    var m = Math.floor((a + 11 * h + 22 * l) / 451);
+    var month = Math.floor((h + l - 7 * m + 114) / 31);
+    var day = ((h + l - 7 * m + 114) % 31) + 1;
+    return toISO(new Date(Date.UTC(year, month - 1, day)));
+  }
+  function holidaysForYear(year) {
+    if (holidayCache[year]) return holidayCache[year];
+    var map = {};
+    Object.keys(FIXED_HOLIDAYS).forEach(function (md) { map[year + '-' + md] = FIXED_HOLIDAYS[md]; });
+    var easter = easterISO(year);
+    map[easter] = 'Pasqua';
+    map[addDays(easter, 1)] = 'Lunedi dell Angelo';
+    holidayCache[year] = map;
+    return map;
+  }
+  function holidayName(iso) {
+    if (!parseISO(iso)) return null;
+    return holidaysForYear(+iso.slice(0, 4))[iso] || null;
   }
   function slug(s) {
     var out = String(s || 'progetto').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -179,7 +216,8 @@ window.GanttPDF = (function () {
           end: t.end,
           duration: Math.max(1, parseInt(t.duration, 10) || diffDays(t.start, t.end) + 1),
           color: /^#[0-9a-fA-F]{6}$/.test(t.color || '') ? t.color : '#6366f1',
-          predecessorId: t.predecessorId || null
+          predecessorId: t.predecessorId || null,
+          link: LINK_LABEL[t.link] ? t.link : 'FS'
         };
       });
     var min = null, max = null;
@@ -234,7 +272,7 @@ window.GanttPDF = (function () {
     opsText(ops, COL.durRight, 512, 'GG', 6.5, { bold: true, color: MUTED, align: 'right' });
     opsText(ops, COL.start, 512, 'INIZIO', 6.5, { bold: true, color: MUTED });
     opsText(ops, COL.end, 512, 'FINE', 6.5, { bold: true, color: MUTED });
-    opsText(ops, COL.after, 512, 'DOPO', 6.5, { bold: true, color: MUTED, align: 'right' });
+    opsText(ops, COL.after, 512, 'VINCOLO', 6.5, { bold: true, color: MUTED, align: 'right' });
 
     /* mesi */
     var cursor = data.start;
@@ -257,14 +295,14 @@ window.GanttPDF = (function () {
     opsLine(ops, M, 506, PAGE_W - M, 506, 1, [0.78, 0.82, 0.89]);
     opsLine(ops, tlX - 10, 506, tlX - 10, ROWS_BOTTOM, 0.8, [0.88, 0.9, 0.94]);
 
-    /* weekend */
+    /* weekend e festivi */
     for (var i = 0; i < data.days; i++) {
       var iso = addDays(data.start, i);
       var wd = parseISO(iso).getUTCDay();
-      if (wd === 0 || wd === 6) {
-        var w = Math.max(0.9, colW);
-        opsRect(ops, tlX + i * colW, ROWS_BOTTOM, w, ROWS_TOP - ROWS_BOTTOM, [0.955, 0.962, 0.975]);
-      }
+      var hol = holidayName(iso);
+      if (!hol && wd !== 0 && wd !== 6) continue;
+      var w = Math.max(0.9, colW);
+      opsRect(ops, tlX + i * colW, ROWS_BOTTOM, w, ROWS_TOP - ROWS_BOTTOM, hol ? HOLIDAY_FILL : WEEKEND_FILL);
     }
 
     /* linee mesi */
@@ -289,15 +327,26 @@ window.GanttPDF = (function () {
       if (pi === undefined) return;
       if (pi < pageStart || pi >= pageStart + rows.length) return;
       var pred = list[pi];
-      var x1 = tlX + diffDays(data.start, pred.end) * colW + colW;
-      var x2 = tlX + diffDays(data.start, t.start) * colW;
+      var pStartX = tlX + diffDays(data.start, pred.start) * colW;
+      var pEndX = tlX + diffDays(data.start, pred.end) * colW + colW;
+      var tStartX = tlX + diffDays(data.start, t.start) * colW;
+      var tEndX = tlX + diffDays(data.start, t.end) * colW + colW;
+      var x1 = t.link === 'SS' ? pStartX : pEndX;
+      var x2 = t.link === 'FF' ? tEndX : tStartX;
       var y1 = ROWS_TOP - (pi - pageStart + 0.5) * ROW_H;
       var y2 = ROWS_TOP - (i + 0.5) * ROW_H;
-      var gap = x2 - x1;
-      if (gap < 0) return;
-      var mid = x1 + (gap >= 10 ? Math.min(8, gap / 2) : 4);
-      ops.push('q 0.45 0.5 0.6 RG 0.7 w ' + num(x1) + ' ' + num(y1) + ' m ' + num(mid) + ' ' + num(y1) + ' l ' +
-        num(mid) + ' ' + num(y2) + ' l ' + num(x2 - 2) + ' ' + num(y2) + ' l S Q');
+      var dash = t.link === 'SS' ? '[2 1.5] 0 d ' : (t.link === 'FF' ? '[1 1.5] 0 d ' : '');
+      var mid, path;
+      if (x2 - x1 >= 4) {
+        mid = x1 + Math.min(8, (x2 - x1) / 2);
+        path = num(x1) + ' ' + num(y1) + ' m ' + num(mid) + ' ' + num(y1) + ' l ' +
+          num(mid) + ' ' + num(y2) + ' l ' + num(x2 - 2) + ' ' + num(y2) + ' l';
+      } else {
+        mid = Math.max(tlX + 1, Math.min(x1, x2) - 6);
+        path = num(x1) + ' ' + num(y1) + ' m ' + num(mid) + ' ' + num(y1) + ' l ' +
+          num(mid) + ' ' + num(y2) + ' l ' + num(x2 - 2) + ' ' + num(y2) + ' l';
+      }
+      ops.push('q 0.45 0.5 0.6 RG 0.7 w ' + dash + path + ' S Q');
       ops.push('q 0.45 0.5 0.6 rg ' + num(x2) + ' ' + num(y2) + ' m ' + num(x2 - 4) + ' ' + num(y2 + 1.8) + ' l ' +
         num(x2 - 4) + ' ' + num(y2 - 1.8) + ' l f Q');
     });
@@ -313,7 +362,7 @@ window.GanttPDF = (function () {
       opsText(ops, COL.start, cy - 2.4, fmtNumShort(t.start), 7);
       opsText(ops, COL.end, cy - 2.4, fmtNumShort(t.end), 7);
       var pi = t.predecessorId ? pos[t.predecessorId] : undefined;
-      if (pi !== undefined) opsText(ops, COL.after, cy - 2.4, '#' + (pi + 1), 7, { color: MUTED, align: 'right' });
+      if (pi !== undefined) opsText(ops, COL.after, cy - 2.4, (LINK_LABEL[t.link] || 'dopo') + ' #' + (pi + 1), 7, { color: MUTED, align: 'right' });
 
       var x = tlX + diffDays(data.start, t.start) * colW;
       var bw = Math.max(1.4, t.duration * colW);
@@ -323,7 +372,11 @@ window.GanttPDF = (function () {
 
     /* piè di pagina */
     opsLine(ops, M, 36, PAGE_W - M, 36, 0.7, [0.9, 0.92, 0.95]);
-    opsText(ops, M, 23, fit('GanttFlow · ' + (project.name || 'Progetto'), 480, 7, false), 7, { color: MUTED });
+    opsText(ops, M, 23, fit('GanttFlow · ' + (project.name || 'Progetto'), 320, 7, false), 7, { color: MUTED });
+    opsRect(ops, 372, 20, 7, 7, WEEKEND_FILL, [0.9, 0.78, 0.7]);
+    opsText(ops, 383, 23, 'weekend', 6.5, { color: MUTED });
+    opsRect(ops, 428, 20, 7, 7, HOLIDAY_FILL, [0.9, 0.72, 0.72]);
+    opsText(ops, 439, 23, 'festivo', 6.5, { color: MUTED });
     opsText(ops, PAGE_W - M, 23, 'Pagina ' + (pageIndex + 1) + ' di ' + pageCount, 7, { color: MUTED, align: 'right' });
     if (!list.length) {
       opsText(ops, PAGE_W / 2, 300, 'Nessuna attività nel progetto', 12, { color: MUTED, align: 'center' });

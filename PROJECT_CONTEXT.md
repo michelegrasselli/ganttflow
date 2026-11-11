@@ -23,35 +23,44 @@ reimportabile.
   - durata + inizio compilati → la **fine** viene calcolata (`fine = inizio + durata − 1`);
   - inizio + fine compilati → la **durata** viene calcolata (`durata = fine − inizio + 1`).
 - Le date sono giorni di calendario inclusivi (nessuna esclusione di weekend o festivi).
-- Ogni attività ha un **colore** selezionabile, usato nella barra del Gantt e nel PDF.
+- Ogni attività ha un **colore** scelto da una palette di tonalità preimpostate (14 colori),
+  usato nella barra del Gantt e nel PDF. Non è previsto il selettore colore nativo.
 
 ### 2.2 Diagramma di Gantt (centro)
 - Asse temporale a calendario con mesi, giorni, numero del giorno e iniziale del
   giorno della settimana.
 - Barra colorata per ogni attività, proporzionale alla durata.
-- Evidenziazione di weekend, giorno corrente e separatori di mese.
+- **Sabati e domeniche in arancione**, **festivi italiani in rosso** con nome nel
+  tooltip del giorno; il giorno corrente ha un indicatore dedicato.
 - Zoom a 4 livelli (Dettaglio, Standard, Compatto, Panoramica), navigazione "Oggi"
   e indicatore del mese visibile durante lo scorrimento.
 
 ### 2.3 Dipendenze tra attività
-- Ogni attività può avere una **attività precedente** (relazione finish-to-start):
-  il successore inizia il giorno dopo la fine del predecessore.
-- È previsto uno **sfasamento** opzionale (lag 0–365 giorni).
-- Quando cambia la data di fine o la durata di un predecessore, tutti i successori
-  vengono ricalcolati a catena in ordine topologico.
-- La data di inizio di un'attività collegata è **bloccata** (calcolata); per
-  sbloccarla si sceglie "—" nel selettore del predecessore.
+- Ogni attività può avere una **attività collegata** e un **tipo di vincolo**:
+  - `FS` — **Inizia dopo**: inizia il giorno dopo la fine dell'attività collegata
+    (`inizio = fine_predecessore + 1 + offset`);
+  - `SS` — **Inizia con**: mantiene sempre la stessa distanza tra le date di inizio
+    delle due attività (`inizio = inizio_predecessore + offset`);
+  - `FF` — **Finisce prima**: termina prima della fine dell'attività collegata
+    (`fine = fine_predecessore − 1 − offset`, poi `inizio = fine − durata + 1`).
+- L'**offset** è un intero 0–365 giorni e il suo significato dipende dal tipo.
+- Quando cambia una data o la durata di un predecessore, tutti i successori vengono
+  ricalcolati a catena in ordine topologico.
+- Le date derivate sono **bloccate** (lucchetto accanto al campo): l'inizio per `FS`
+  e `SS`, la fine per `FF`. Per sbloccarle si sceglie "—" nel selettore.
 - I **cicli** sono impediti: le opzioni che creerebbero un ciclo non sono mostrate
   e un controllo runtime rifiuta comunque il collegamento.
-- I collegamenti sono disegnati come connettori tra le barre.
+- I collegamenti sono disegnati come connettori tra le barre: linea continua per `FS`,
+  tratteggio lungo per `SS`, tratteggio corto per `FF`.
 
 ### 2.4 Esportazione
 - **PDF** A4 orizzontale, generato senza librerie: tabella attività (numero, nome,
-  giorni, inizio, fine, precedente) e barre sul calendario, con paginazione
-  automatica, intestazione, piè di pagina con numero di pagina e file name
-  derivato dal nome del progetto.
+  giorni, inizio, fine, colonna **Vincolo** con tipo e numero dell'attività collegata)
+  e barre sul calendario con weekend arancioni e festivi rossi, legenda a piè di
+  pagina, paginazione automatica, intestazione e numero di pagina; nome file derivato
+  dal nome del progetto.
 - **Progetto JSON** reimportabile (`format: "ganttflow-project"`), contenente
-  metadati e tutte le attività con dipendenze e colori.
+  metadati e tutte le attività con dipendenze (tipo e offset) e colori.
 
 ### 2.5 Gestione progetto
 - Nome progetto modificabile.
@@ -80,6 +89,7 @@ Progetto (in memoria e nel file esportato):
       "duration": 5,
       "color": "#6366f1",
       "predecessorId": null,
+      "link": "FS",
       "lag": 0
     }
   ]
@@ -101,7 +111,9 @@ Regole:
 - Date in formato `YYYY-MM-DD`, sempre giorni UTC per evitare problemi di fuso.
 - `end` è inclusivo.
 - `predecessorId` è `null` oppure l'`id` di un'altra attività.
-- `lag` è un intero ≥ 0 (giorni di attesa dopo la fine del predecessore).
+- `link` è uno tra `FS`, `SS`, `FF`; se assente o sconosciuto viene normalizzato a `FS`.
+- `lag` è un intero 0–365: giorni di attesa dopo la fine (`FS`), distanza tra gli
+  inizi (`SS`) o giorni prima della fine (`FF`).
 - In import ogni campo viene validato e normalizzato; id non validi vengono
   rigenerati, riferimenti mancanti azzerati, durata e lag limitati.
 
@@ -129,27 +141,31 @@ assets/favicon.svg  logo e favicon
 |---|---|
 | Vanilla JS senza framework né build | Deve funzionare offline aprendo il file; nell'ambiente non sono disponibili Node/npm. |
 | Giorni di calendario inclusivi | Coerente con la percezione utente di "durata in giorni" e semplice da spiegare. |
-| Dipendenza finish-to-start + lag | Modello più diffuso e prevedibile; copre i casi richiesti. |
+| Dipendenze FS + SS + FF con offset | Coprono sequenza, avvio parallelo a distanza fissa e chiusura anticipata rispetto al predecessore. |
 | Ricalcolo topologico con visita delle dipendenze | Aggiorna tutti i successori in un solo passaggio e ignora/azzera i cicli residui. |
-| Inizio bloccato quando c'è un predecessore | Rende esplicito che la data è derivata; evita stati incoerenti. |
+| Date derivate bloccate (inizio per FS/SS, fine per FF) | Rende esplicito che la data è calcolata dal vincolo; evita stati incoerenti. |
+| Palette colori preimpostata | Scelta più rapida e coerente rispetto al selettore colore nativo. |
+| Festivi italiani calcolati (Pasqua inclusa) | Nessun dato esterno: algoritmo gregoriano + festivi nazionali fissi, condiviso tra UI e PDF. |
 | PDF scritto a mano | Nessuna libreria disponibile offline; output vettoriale e testo selezionabile. |
 | Formato progetto versionato | Consente evoluzioni future mantenendo la compatibilità. |
 | Autosalvataggio locale | L'utente non deve perdere il lavoro chiudendo il browser. |
 
-## 6. Stato attuale (v1.0)
+## 6. Stato attuale (v1.1)
 
 Implementato e verificato:
 - calcolo bidirezionale durata/inizio/fine;
-- dipendenze a catena con lag e prevenzione dei cicli;
-- rendering del Gantt con zoom, weekend, oggi, connettori, selettore colore;
-- export PDF multipagina e export/import JSON;
+- dipendenze a catena con tre tipi di vincolo (FS, SS, FF), offset 0–365 e
+  prevenzione dei cicli;
+- rendering del Gantt con zoom, weekend arancioni, festivi italiani rossi, oggi,
+  connettori differenziati per tipo e palette colori preimpostata;
+- export PDF multipagina con colonna Vincolo e legenda weekend/festivi; export/import JSON;
 - salvataggio automatico, nuovo progetto, esempio, duplicazione, eliminazione con undo;
 - layout responsive (breakpoint 1280/1100/980 px) e stato vuoto.
 
 ## 7. Roadmap possibile
 
-- Feriali/holidays esclusi dalla durata.
-- Dipendenze start-to-start, finish-to-finish e percentuale di completamento.
+- Feriali/festivi esclusi dal conteggio della durata.
+- Percentuale di completamento e baseline di piano.
 - Trascinamento delle barre per spostare/ridimensionare le attività.
 - Più progetti e cartelle, con esportazione di backup completo.
 - Import/export CSV e MS Project XML.
