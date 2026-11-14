@@ -147,6 +147,25 @@ bordo. Fai **doppio clic** sul bordo, oppure usa **Ripristina colonne** in basso
 destra, per tornare alle larghezze predefinite. La scelta viene ricordata nel browser
 e non modifica il file del progetto.
 
+### Creare vincoli trascinando sul grafico
+
+Passando sopra una riga, all'inizio e alla fine della barra compaiono due pallini.
+Trascina da un pallino fino all'inizio o alla fine di un'altra attività (basta
+rilasciare vicino all'estremo della barra): una linea guida e un'etichetta mostrano il
+vincolo che verrà creato.
+
+| Da → a | Vincolo creato |
+|---|---|
+| inizio di A → fine di B | A **inizia dopo** la fine di B |
+| fine di A → inizio di B | B **inizia dopo** la fine di A |
+| inizio di A → inizio di B | A **inizia con** B |
+| fine di A → fine di B | A **finisce prima** della fine di B (nel tempo ciclo: finisce insieme) |
+
+L'offset viene messo a 0. Ogni attività ha un solo collegamento: se ne aveva già uno
+viene sostituito (il messaggio lo indica e offre **Annulla**). I collegamenti che
+creerebbero un ciclo sono segnalati in rosso e non vengono creati. Funziona sia nel
+Gantt sia nel tempo ciclo.
+
 ### Riordinare le attività
 
 Passando con il mouse sul bordo sinistro di una riga compare una **maniglia** (⋮⋮):

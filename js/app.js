@@ -1056,8 +1056,8 @@
     var hint = document.querySelector('.statusbar .status-hint');
     if (hint) {
       hint.textContent = cyc
-        ? 'Doppio clic su una pagina per rinominarla · «Importa pagina» la inserisce come attività collegata con il suo tempo ciclo.'
-        : 'Trascina i bordi delle intestazioni per ridimensionare le colonne · Spunte Sab/Dom/Fest: giorni inclusi nella durata.';
+        ? 'Trascina dai pallini di inizio/fine delle barre per creare un vincolo · Doppio clic su una pagina per rinominarla.'
+        : 'Trascina dai pallini di inizio/fine delle barre per creare un vincolo · Spunte Sab/Dom/Fest: giorni inclusi nella durata.';
     }
     var emptyTitle = emptyEl ? emptyEl.querySelector('h2') : null;
     var emptyText = emptyEl ? emptyEl.querySelector('p') : null;
@@ -1141,7 +1141,7 @@
           '<button type="button" class="icon-btn danger" data-action="delete" title="Elimina attività" aria-label="Elimina attività"><svg viewBox="0 0 16 16"><path d="M3.4 4.6h9.2M6.2 4.6V3.2h3.6v1.4M4.6 4.6l.6 8.2h5.6l.6-8.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
         '</div>' +
       '</div>' +
-      '<div class="timeline"><div class="lane"><div class="bar"></div></div></div>';
+      '<div class="timeline"><div class="lane"><div class="bar"></div>' + LINK_POINTS + '</div></div>';
     var select = row.querySelector('[data-field="pred"]');
     buildPredOptions(select, t);
     var linkSel = row.querySelector('[data-field="link"]');
@@ -1164,7 +1164,10 @@
 
   var DRAG_HANDLE = '<button type="button" class="drag-handle" tabindex="-1" title="Trascina per spostare l’attività sopra o sotto le altre (oppure Alt+↑/↓ sul nome)" aria-hidden="true">' +
     '<svg viewBox="0 0 8 14"><circle cx="2" cy="2.5" r="1.1"/><circle cx="6" cy="2.5" r="1.1"/><circle cx="2" cy="7" r="1.1"/><circle cx="6" cy="7" r="1.1"/><circle cx="2" cy="11.5" r="1.1"/><circle cx="6" cy="11.5" r="1.1"/></svg></button>';
-  var LOCK_SVG ='<span class="lock" aria-hidden="true"><svg viewBox="0 0 16 16"><rect x="3.2" y="7" width="9.6" height="6.6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0V7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></span>';
+  var LINK_POINTS =
+    '<span class="link-pt link-pt-start" data-pt="start" title="Inizio: trascina sull’inizio o sulla fine di un’altra attività per creare un vincolo"></span>' +
+    '<span class="link-pt link-pt-end" data-pt="end" title="Fine: trascina sull’inizio o sulla fine di un’altra attività per creare un vincolo"></span>';
+  var LOCK_SVG = '<span class="lock" aria-hidden="true"><svg viewBox="0 0 16 16"><rect x="3.2" y="7" width="9.6" height="6.6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0V7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></span>';
   var SHEET_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2.5 6.5h11M6.5 6.5v7" stroke="currentColor" stroke-width="1.3"/></svg>';
 
   function buildCycleRow(t) {
@@ -1200,7 +1203,7 @@
           '<button type="button" class="icon-btn danger" data-action="delete" title="Elimina attività" aria-label="Elimina attività"><svg viewBox="0 0 16 16"><path d="M3.4 4.6h9.2M6.2 4.6V3.2h3.6v1.4M4.6 4.6l.6 8.2h5.6l.6-8.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
         '</div>' +
       '</div>' +
-      '<div class="timeline"><div class="lane"><div class="bar"></div></div></div>';
+      '<div class="timeline"><div class="lane"><div class="bar"></div>' + LINK_POINTS + '</div></div>';
     buildPredOptions(row.querySelector('[data-field="pred"]'), t);
     var linkSel = row.querySelector('[data-field="link"]');
     LINK_ORDER.forEach(function (k) { linkSel.appendChild(new Option(LINK_TYPES[k].label, k)); });
@@ -1309,6 +1312,180 @@
       });
     });
     renderCycleCalc();
+  }
+
+  /* ---------------- vincoli trascinando tra inizio/fine delle barre ---------------- */
+  var linkDrag = null;
+
+  function placeLinkPoints(row, left, width) {
+    var s = row.querySelector('.link-pt-start');
+    var e = row.querySelector('.link-pt-end');
+    if (s) s.style.left = left + 'px';
+    if (e) e.style.left = (left + width) + 'px';
+  }
+
+  /* Traduce i due punti collegati nel vincolo del modello (un solo predecessore per attività):
+     inizio↔fine → «Inizia dopo» (chi ha l'inizio dipende da chi ha la fine);
+     inizio↔inizio → «Inizia con», fine↔fine → «Finisce prima»: dipende l'attività da cui si parte. */
+  function linkFromPoints(aId, aPt, bId, bPt) {
+    if (aPt === 'start' && bPt === 'end') return { dep: aId, pred: bId, link: 'FS' };
+    if (aPt === 'end' && bPt === 'start') return { dep: bId, pred: aId, link: 'FS' };
+    if (aPt === 'start') return { dep: aId, pred: bId, link: 'SS' };
+    return { dep: aId, pred: bId, link: 'FF' };
+  }
+
+  function pointCenter(pt) {
+    var r = pt.getBoundingClientRect();
+    var g = grid.getBoundingClientRect();
+    return { x: r.left + r.width / 2 - g.left, y: r.top + r.height / 2 - g.top };
+  }
+
+  function onLinkDragStart(e) {
+    var pt = e.target.closest ? e.target.closest('.link-pt') : null;
+    if (!pt || e.button !== 0) return;
+    var row = pt.closest('.row.task');
+    if (!row) return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeColorPops(null);
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'link-drag');
+    svg.setAttribute('width', grid.scrollWidth);
+    svg.setAttribute('height', grid.scrollHeight);
+    var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    svg.appendChild(path);
+    grid.appendChild(svg);
+    var label = el('div', 'link-drag-label');
+    grid.appendChild(label);
+    linkDrag = { id: row.dataset.id, pt: pt.dataset.pt, el: pt, svg: svg, path: path, label: label, target: null };
+    pt.classList.add('source');
+    grid.classList.add('linking');
+    document.body.classList.add('link-dragging');
+    selectTask(row.dataset.id);
+    updateLinkDrag(e.clientX, e.clientY);
+  }
+
+  /* Trova il punto di aggancio sotto il cursore: un punto, oppure l'estremo più vicino di una barra. */
+  function linkTargetAt(x, y) {
+    var node = document.elementFromPoint(x, y);
+    if (!node || !node.closest) return null;
+    if (node.closest('.fields')) return null;
+    var row = node.closest('.row.task');
+    if (!row || row.dataset.id === linkDrag.id) return null;
+    var pt = node.closest('.link-pt');
+    if (!pt) {
+      var bar = node.closest('.bar') || row.querySelector('.bar');
+      var r = bar.getBoundingClientRect();
+      if (!node.closest('.bar') && (x < r.left - 18 || x > r.right + 18)) return null;
+      pt = row.querySelector(x < r.left + r.width / 2 ? '.link-pt-start' : '.link-pt-end');
+    }
+    return pt ? { id: row.dataset.id, pt: pt.dataset.pt, el: pt } : null;
+  }
+
+  function linkDescription(rel) {
+    var dep = taskById(rel.dep), pred = taskById(rel.pred);
+    if (!dep || !pred) return '';
+    var dn = taskLabel(dep), pn = taskLabel(pred);
+    if (rel.link === 'FS') return '«' + dn + '» inizia dopo la fine di «' + pn + '»';
+    if (rel.link === 'SS') return '«' + dn + '» inizia con «' + pn + '»';
+    return isCycle()
+      ? '«' + dn + '» finisce insieme a «' + pn + '»'
+      : '«' + dn + '» finisce prima della fine di «' + pn + '»';
+  }
+
+  function updateLinkDrag(clientX, clientY) {
+    var d = linkDrag;
+    var g = grid.getBoundingClientRect();
+    var a = pointCenter(d.el);
+    var target = linkTargetAt(clientX, clientY);
+    if (d.target && (!target || target.el !== d.target.el)) d.target.el.classList.remove('target', 'invalid');
+    d.target = target;
+    var bx = clientX - g.left, by = clientY - g.top;
+    var valid = false, text = 'Rilascia sull’inizio o sulla fine di un’altra attività';
+    if (target) {
+      var c = pointCenter(target.el);
+      bx = c.x; by = c.y;
+      var rel = linkFromPoints(d.id, d.pt, target.id, target.pt);
+      valid = !wouldCycle(rel.dep, rel.pred);
+      target.el.classList.add('target');
+      target.el.classList.toggle('invalid', !valid);
+      text = valid ? linkDescription(rel) : 'Non possibile: creerebbe un ciclo tra le attività';
+    }
+    var mx = (a.x + bx) / 2;
+    d.path.setAttribute('d', 'M' + a.x + ' ' + a.y + ' C' + mx + ' ' + a.y + ' ' + mx + ' ' + by + ' ' + bx + ' ' + by);
+    d.svg.classList.toggle('ok', !!target && valid);
+    d.svg.classList.toggle('bad', !!target && !valid);
+    d.label.textContent = text;
+    d.label.classList.toggle('ok', !!target && valid);
+    d.label.classList.toggle('bad', !!target && !valid);
+    d.label.style.left = (clientX - g.left + 14) + 'px';
+    d.label.style.top = (clientY - g.top + 16) + 'px';
+  }
+
+  function onLinkDragMove(e) {
+    if (!linkDrag) return;
+    e.preventDefault();
+    var br = board.getBoundingClientRect();
+    var edge = 30;
+    if (e.clientX > br.right - edge) board.scrollLeft += 14;
+    else if (e.clientX < br.left + leftWidth() + edge) board.scrollLeft -= 14;
+    if (e.clientY > br.bottom - edge) board.scrollTop += 10;
+    else if (e.clientY < br.top + (headerRow ? headerRow.offsetHeight : 0) + edge) board.scrollTop -= 10;
+    updateLinkDrag(e.clientX, e.clientY);
+  }
+
+  function onLinkDragEnd() {
+    if (!linkDrag) return;
+    var d = linkDrag;
+    linkDrag = null;
+    d.svg.remove();
+    d.label.remove();
+    d.el.classList.remove('source');
+    if (d.target) d.target.el.classList.remove('target', 'invalid');
+    grid.classList.remove('linking');
+    document.body.classList.remove('link-dragging');
+    if (d.target) createLink(linkFromPoints(d.id, d.pt, d.target.id, d.target.pt));
+  }
+
+  function createLink(rel) {
+    var dep = taskById(rel.dep), pred = taskById(rel.pred);
+    if (!dep || !pred || dep === pred) return;
+    if (wouldCycle(dep.id, pred.id)) {
+      toast('Vincolo non possibile: creerebbe un ciclo tra le attività.', { type: 'error' });
+      return;
+    }
+    if (dep.predecessorId === pred.id && dep.link === rel.link && !dep.lag) {
+      toast('Questo vincolo esiste già.');
+      return;
+    }
+    var old = dep.predecessorId ? taskById(dep.predecessorId) : null;
+    var snapshot = JSON.stringify(tasks());
+    var projectAt = state.project;
+    var sheetAt = isCycle() ? state.project.activeSheet : null;
+    dep.predecessorId = pred.id;
+    dep.link = rel.link;
+    dep.lag = 0;
+    state.selectedId = dep.id;
+    var msg = 'Vincolo creato: ' + linkDescription(rel) + '.' +
+      (old && old.id !== pred.id ? ' Sostituisce il collegamento con «' + (old.name || 'attività') + '».' : '');
+    renderAll();
+    toast(msg, {
+      actionLabel: 'Annulla',
+      duration: 7000,
+      onAction: function () {
+        if (state.project !== projectAt) return;
+        if (isCycle()) {
+          if (!sheetById(sheetAt)) return;
+          state.project.activeSheet = sheetAt;
+        }
+        try {
+          setTasks(JSON.parse(snapshot));
+          renderAll();
+          toast('Vincolo annullato.');
+        } catch (err) { /* ignore */ }
+      }
+    });
   }
 
   /* ---------------- calcolo del tempo ciclo tra due fini ---------------- */
@@ -1803,6 +1980,7 @@
       var w = Math.max(4, x1 - x0 - 2);
       var maxLeft = Math.max(0, timeMap.count * px - 4);
       bar.style.left = Math.min(x0 + 1, maxLeft) + 'px';
+      placeLinkPoints(row, Math.min(x0 + 1, maxLeft), w);
       bar.style.width = w + 'px';
       bar.style.background = t.color;
       bar.classList.toggle('light', isLight(t.color));
@@ -1945,6 +2123,7 @@
       var w = Math.max(4, t.duration * px - 2);
       bar.style.left = (x0 + 1) + 'px';
       bar.style.width = w + 'px';
+      placeLinkPoints(row, x0 + 1, w);
       bar.style.background = t.color;
       bar.classList.toggle('light', isLight(t.color));
       bar.classList.toggle('selected', t.id === state.selectedId);
@@ -3180,6 +3359,10 @@
     grid.addEventListener('dblclick', onGridDoubleClick);
     grid.addEventListener('mousedown', onColMouseDown);
     grid.addEventListener('mousedown', onRowDragStart);
+    grid.addEventListener('mousedown', onLinkDragStart);
+    document.addEventListener('mousemove', onLinkDragMove);
+    document.addEventListener('mouseup', onLinkDragEnd);
+    window.addEventListener('blur', onLinkDragEnd);
     document.addEventListener('mousemove', onColMouseMove);
     document.addEventListener('mousemove', onRowDragMove);
     document.addEventListener('mouseup', onColMouseUp);

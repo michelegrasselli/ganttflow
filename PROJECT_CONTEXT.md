@@ -118,6 +118,15 @@ reimportabile.
 - Interfaccia dell'app interamente in **italiano**; il PDF esportato è interamente in
   **inglese** (scelta esplicita per la condivisione del documento).
 
+### 2.5.2 Vincoli trascinando sul grafico
+- Pallini di aggancio a inizio e fine di ogni barra (visibili al passaggio). Trascinando
+  da un pallino all'inizio/fine di un'altra attività si crea il vincolo:
+  inizio↔fine → `FS` (dipende chi ha l'inizio), inizio→inizio → `SS`, fine→fine → `FF`
+  (per `SS`/`FF` dipende l'attività da cui si parte). Offset 0; il collegamento
+  precedente dell'attività dipendente viene sostituito, con annullamento.
+- Linea guida curva + etichetta descrittiva; cicli segnalati in rosso e rifiutati;
+  scorrimento automatico vicino ai bordi.
+
 ### 2.5.1 Riordino attività
 - Maniglia (⋮⋮) visibile al passaggio sul bordo sinistro della riga: trascinando si
   sposta l'attività sopra/sotto le altre (linea guida blu, scorrimento automatico ai
@@ -285,7 +294,10 @@ assets/favicon.svg  logo e favicon
 | Tempo ciclo misurato dal secondo 0 | Un ritardo iniziale fa parte del ciclo; coerente con il righello che parte da 0. |
 | Autosalvataggio locale | L'utente non deve perdere il lavoro chiudendo il browser. |
 
-## 6. Stato attuale (v1.6)
+## 6. Stato attuale (v1.7)
+
+Novità v1.7: creazione dei vincoli trascinando tra inizio e fine delle barre (Gantt e
+tempo ciclo).
 
 Novità v1.6: riordino delle attività per trascinamento (Gantt e tempo ciclo), numerazione
 progressiva e calcolo del tempo ciclo tra le fini di due attività.
