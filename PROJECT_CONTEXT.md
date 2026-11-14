@@ -38,11 +38,32 @@ reimportabile.
   giorno della settimana.
 - Barra colorata per ogni attività, estesa all'intervallo di calendario tra inizio e
   fine (quindi può attraversare giorni esclusi).
-- **Sabati e domeniche in arancione**, **festivi italiani in rosso** con nome nel
-  tooltip del giorno; il giorno corrente ha un indicatore dedicato. La colorazione
-  indica il tipo di giorno, non se è conteggiato dall'attività.
+- **Sabati e domeniche in arancione**, **festivi italiani e giorni rossi personalizzati
+  in rosso** con nome nel tooltip del giorno; il giorno corrente ha un indicatore
+  dedicato. La colorazione indica il tipo di giorno, non se è conteggiato dall'attività.
+- **Periodi nascosti**: un intervallo di date può essere escluso dalla timeline; le
+  date successive vengono compattate e il periodo non occupa spazio. Le date e le
+  durate delle attività non cambiano; l'intervallo è escluso anche dal PDF.
 - Zoom a 4 livelli (Dettaglio, Standard, Compatto, Panoramica), navigazione "Oggi"
   e indicatore del mese visibile durante lo scorrimento.
+
+### 2.2.1 Tabella e colonne
+- Colonne della colonna sinistra **ridimensionabili**: si trascina il bordo destro di
+  un'intestazione per allargare o restringere la colonna (limiti min/max per colonna).
+- Doppio clic sul bordo o pulsante **Ripristina colonne** per tornare ai valori
+  predefiniti.
+- La larghezza è una preferenza di visualizzazione salvata nel browser
+  (`ganttflow.layout.v1`), non fa parte del progetto esportato.
+
+### 2.2.2 Calendario personalizzato (pannello sotto il Gantt)
+- **Periodo nascosto**: campi inizio/fine e pulsante **Nascondi**; i periodi attivi
+  sono mostrati come pillole rimovibili con **×**. Gli intervalli invertiti vengono
+  scambiati, quelli sovrapposti o adiacenti uniti; massimo 50. È rifiutato un intervallo
+  che nasconderebbe tutte le date del diagramma.
+- **Giorni rossi**: campo data, nome facoltativo e pulsante **Aggiungi**; le voci sono
+  mostrate come pillole rimovibili con **×**. Un giorno rosso personalizzato si comporta
+  come un festivo italiano: rosso in app e PDF, saltato nella durata se la spunta
+  **Fest** è vuota. Sono rifiutati duplicati e date già festive in Italia; massimo 200.
 
 ### 2.3 Dipendenze tra attività
 - Ogni attività può avere una **attività collegata** e un **tipo di vincolo**:
@@ -69,12 +90,16 @@ reimportabile.
 ### 2.4 Esportazione
 - **PDF** A4 orizzontale, generato senza librerie: tabella attività (numero, nome,
   giorni, inizio, fine, colonna **Vincolo** con tipo e numero dell'attività collegata)
-  e barre sul calendario con weekend arancioni e festivi rossi, legenda a piè di
-  pagina, paginazione automatica, intestazione e numero di pagina; nome file derivato
-  dal nome del progetto.
-- **Progetto JSON** reimportabile (`format: "ganttflow-project"`, versione 2),
-  contenente metadati e tutte le attività con dipendenze (tipo e offset), colori e
-  spunte dei giorni considerati.
+  e barre sul calendario con weekend arancioni, festivi (italiani e personalizzati)
+  rossi, legenda a piè di pagina, paginazione automatica, intestazione e numero di
+  pagina; nome file derivato dal nome del progetto.
+- Nel PDF i **periodi nascosti** vengono compattati come nella schermata, con
+  indicazione del numero di giorni nascosti nell'intestazione e voce dedicata nella
+  legenda.
+- **Progetto JSON** reimportabile (`format: "ganttflow-project"`, versione 3),
+  contenente metadati, tutte le attività con dipendenze (tipo e offset), colori e
+  spunte dei giorni considerati, periodi nascosti e giorni rossi personalizzati.
+  I file versione 2 (senza i nuovi elenchi) restano importabili.
 
 ### 2.5 Gestione progetto
 - Nome progetto modificabile.
@@ -93,7 +118,13 @@ Progetto (in memoria e nel file esportato):
 {
   "name": "Lancio nuovo sito web",
   "createdAt": "2026-11-10T08:00:00.000Z",
-  "updatedAt": "2026-11-10T08:00:00.000Z",
+  "updatedAt": "2026-11-11T09:30:00.000Z",
+  "hiddenRanges": [
+    { "start": "2026-12-24", "end": "2026-12-27" }
+  ],
+  "customHolidays": [
+    { "date": "2026-12-07", "name": "Chiusura aziendale" }
+  ],
   "tasks": [
     {
       "id": "t9e17ounkti",
@@ -118,8 +149,8 @@ File esportato/importato:
 ```json
 {
   "format": "ganttflow-project",
-  "version": 2,
-  "exportedAt": "2026-11-10T08:04:57.146Z",
+  "version": 3,
+  "exportedAt": "2026-11-11T09:30:00.000Z",
   "project": { "...": "come sopra" }
 }
 ```
@@ -134,6 +165,15 @@ Regole:
 - `countSat`, `countSun`, `countHol` (booleani, default `false`) indicano se sabati,
   domeniche e festivi contano nella durata. Se assenti (file precedenti alla v2)
   vengono trattati come `false`, quindi saltati.
+- `hiddenRanges` (default `[]`) contiene intervalli `{start, end}` inclusivi esclusi
+  dalla visualizzazione. Non modifica il modello temporale delle attività; in
+  importazione viene normalizzato (scambio, fusione di intervalli sovrapposti o
+  adiacenti, massimo 50).
+- `customHolidays` (default `[]`) contiene giorni rossi `{date, name}` che si comportano
+  come festivi (rossi e saltati quando `countHol` è `false`). In importazione viene
+  normalizzato (scarto di date non valide e duplicati, ordinamento, massimo 200).
+- La larghezza delle colonne **non** è nel progetto: è una preferenza locale
+  (`ganttflow.layout.v1` in `localStorage`).
 - In import ogni campo viene validato e normalizzato; id non validi vengono
   rigenerati, riferimenti mancanti azzerati, durata e lag limitati.
 
@@ -151,6 +191,15 @@ assets/favicon.svg  logo e favicon
 
 - `app.js` è un IIFE in strict mode; lo stato vive in `state.project` e viene
   ricalcolato con `recalc()` prima di ogni render.
+- La timeline usa una **mappa dei giorni visibili** (`timeMap` con array di prefissi
+  `prefix` e lista `visible`) costruita dai periodi nascosti: barre, connettori, oggi,
+  intestazioni e scorrimento usano `visIndex()`/`xOf()` invece dell'indice di
+  calendario. Il PDF applica lo stesso principio con `visIndex`, `xAt` e
+  `visibleSpan`.
+- I giorni rossi personalizzati alimentano un indice (`customHolidayIndex`) ricostruito
+  da `rebuildHolidayIndex()` e usato da `holidayName()` insieme ai festivi italiani.
+- Le colonne usano la variabile CSS `--colw` (griglia a 8 tracce) e `--left-w`;
+  il trascinamento aggiorna le variabili e salva le larghezze in `localStorage`.
 - `pdf.js` scrive direttamente i byte del PDF (oggetti, xref, stream di contenuto)
   e usa i font standard Helvetica/Helvetica-Bold con `WinAnsiEncoding`.
 - Persistenza: `localStorage`; nessun backend, nessuna chiamata di rete.
@@ -168,11 +217,16 @@ assets/favicon.svg  logo e favicon
 | Date derivate bloccate (inizio per FS/SS, fine per FF) | Rende esplicito che la data è calcolata dal vincolo; evita stati incoerenti. |
 | Palette colori preimpostata | Scelta più rapida e coerente rispetto al selettore colore nativo. |
 | Festivi italiani calcolati (Pasqua inclusa) | Nessun dato esterno: algoritmo gregoriano + festivi nazionali fissi, condiviso tra UI e PDF. |
+| Periodi nascosti solo visivi | L'utente vuole compattare chiusure e pause senza alterare le date reali del piano; il modello resta coerente e reversibile. |
+| Periodi nascosti normalizzati e fusi | Evita intervalli sovrapposti o invertiti, mantiene la mappa `prefix` monotona e il PDF stabile. |
+| Giorni rossi come festivi a tutti gli effetti | Riutilizza la regola esistente della spunta Fest: un solo comportamento da spiegare, coerente tra calcoli, UI e PDF. |
+| Larghezza colonne in `localStorage` | È una preferenza di vista personale, non un dato del progetto: non sporca il JSON né il lavoro condiviso. |
+| Colonne con limiti min/max | Evita colonne inutilizzabili o layout rotti ed è coerente con il ridimensionamento da tastiera/doppio clic. |
 | PDF scritto a mano | Nessuna libreria disponibile offline; output vettoriale e testo selezionabile. |
 | Formato progetto versionato | Consente evoluzioni future mantenendo la compatibilità. |
 | Autosalvataggio locale | L'utente non deve perdere il lavoro chiudendo il browser. |
 
-## 6. Stato attuale (v1.2)
+## 6. Stato attuale (v1.3)
 
 Implementato e verificato:
 - calcolo bidirezionale durata/inizio/fine sui **giorni considerati**;
@@ -182,10 +236,18 @@ Implementato e verificato:
   prevenzione dei cicli;
 - rendering del Gantt con zoom, weekend arancioni, festivi italiani rossi, oggi,
   connettori differenziati per tipo e palette colori preimpostata;
-- export PDF multipagina con colonna Vincolo e legenda weekend/festivi; export/import JSON v2;
+- **colonne ridimensionabili** con limiti, ripristino (doppio clic o pulsante) e
+  persistenza locale della larghezza;
+- **periodi nascosti** con compattazione della timeline e del PDF, pillole rimovibili
+  e salvataggio nel progetto;
+- **giorni rossi personalizzati** con nome, pillole rimovibili, effetto su durate
+  (spunta Fest), colorazione in app/PDF e salvataggio nel progetto;
+- export PDF multipagina con colonna Vincolo, legenda weekend/festivi/periodo nascosto
+  e conteggio dei giorni nascosti; export/import JSON v3 (v2 ancora importabile);
 - salvataggio automatico, nuovo progetto, esempio, duplicazione (con copia delle spunte),
   eliminazione con undo;
-- layout responsive (breakpoint 1280/1100/980 px) e stato vuoto.
+- layout responsive (breakpoint 1280/1100/980 px), pannello calendario senza overflow
+  e stato vuoto.
 
 ## 7. Roadmap possibile
 

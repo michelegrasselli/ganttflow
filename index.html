@@ -73,11 +73,34 @@
       </div>
     </main>
 
+    <section class="calpanel" id="calPanel" aria-label="Calendario personalizzato">
+      <div class="cal-block">
+        <span class="cal-label" title="Nasconde un intervallo dal diagramma: le date non occupano spazio. Le durate delle attività non cambiano.">Periodo nascosto</span>
+        <div class="cal-form">
+          <input type="date" class="cal-inp" id="hideStart" aria-label="Inizio del periodo da nascondere">
+          <span class="cal-arrow" aria-hidden="true">→</span>
+          <input type="date" class="cal-inp" id="hideEnd" aria-label="Fine del periodo da nascondere">
+          <button type="button" class="cal-btn" id="btnHideRange" title="Nascondi il periodo dal diagramma">Nascondi</button>
+        </div>
+        <div class="chips" id="hiddenChips" aria-live="polite"></div>
+      </div>
+      <div class="cal-block">
+        <span class="cal-label" title="Aggiunge un giorno rosso personalizzato: viene mostrato in rosso e conta come festivo per la spunta Fest.">Giorni rossi</span>
+        <div class="cal-form">
+          <input type="date" class="cal-inp" id="customDate" aria-label="Data del giorno rosso">
+          <input type="text" class="cal-inp cal-name" id="customName" maxlength="60" placeholder="Nome (facoltativo)" aria-label="Nome del giorno rosso">
+          <button type="button" class="cal-btn" id="btnAddCustom" title="Aggiungi un giorno rosso al calendario">Aggiungi</button>
+        </div>
+        <div class="chips" id="customChips" aria-live="polite"></div>
+      </div>
+      <button type="button" class="cal-reset" id="btnResetCols" title="Ripristina la larghezza predefinita delle colonne">Ripristina colonne</button>
+    </section>
+
     <footer class="statusbar">
       <span id="saveStatus">Salvataggio automatico attivo</span>
       <span class="legend"><i class="lg lg-we" aria-hidden="true"></i>Weekend<i class="lg lg-hol" aria-hidden="true"></i>Festivo</span>
-      <span class="status-hint">Spunte Sab/Dom/Fest: giorni inclusi nella durata · l’offset del Vincolo è in giorni.</span>
-      <span class="version">v1.2</span>
+      <span class="status-hint">Trascina i bordi delle intestazioni per ridimensionare le colonne · Spunte Sab/Dom/Fest: giorni inclusi nella durata.</span>
+      <span class="version">v1.3</span>
     </footer>
   </div>
 

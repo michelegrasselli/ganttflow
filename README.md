@@ -11,6 +11,9 @@ e funziona anche completamente offline.
 - **Tabella attività** con nome, durata in giorni considerati, data di inizio e data di fine.
 - **Calcolo bidirezionale**: durata + inizio → fine; inizio + fine → durata.
 - **Giorni considerati** per ogni attività: tre spunte **Sab**, **Dom**, **Fest** (normalmente non spuntate) includono sabati, domeniche e festivi nel conteggio della durata. Se non spuntate, quei giorni vengono saltati.
+- **Colonne ridimensionabili**: trascina il bordo destro di un'intestazione per allargare o restringere la colonna; doppio clic (o **Ripristina colonne**) per tornare alle larghezze predefinite. La larghezza viene ricordata nel browser.
+- **Periodi nascosti**: nasconde un intervallo di date dal diagramma (e dal PDF) senza modificare le date o le durate delle attività.
+- **Giorni rossi personalizzati**: aggiunge manualmente date in rosso (chiusure, festività locali) che valgono come festivi per la spunta **Fest**.
 - **Diagramma di Gantt** a calendario con mesi e giorni; **sabati e domeniche in arancione**, **festivi italiani in rosso** (Natale, Pasqua, Ferragosto, ecc.) e linea di "oggi".
 - **Colori preimpostati** per ogni attività, scelti da una palette e usati nella barra e nel PDF.
 - **Tre tipi di vincolo** tra attività, con offset in giorni e aggiornamento automatico a catena:
@@ -104,6 +107,32 @@ indica il tipo di giorno; è la spunta **Sab**, **Dom** o **Fest** dell'attivit�
 decidere se quel giorno conta nella durata. La legenda è riportata anche a piè di
 pagina nel PDF.
 
+### Personalizzare il calendario
+
+Sotto il diagramma ci sono due strumenti.
+
+**Periodo nascosto** — indica inizio e fine e premi **Nascondi**: l'intervallo
+scompare dal diagramma (e dal PDF) e le date successive vengono compattate, così un
+periodo di chiusura non occupa spazio. Le date e le durate delle attività non
+cambiano. I periodi nascosti sono elencati come pillole: premi **×** per mostrarli di
+nuovo.
+
+**Giorni rossi** — indica una data, un nome facoltativo e premi **Aggiungi**: il
+giorno diventa rosso nel calendario e nel PDF e conta come festivo per la spunta
+**Fest** dell'attività (con la spunta vuota viene saltato nella durata, come i festivi
+italiani). Anche questi giorni sono elencati come pillole rimovibili con **×**.
+
+Entrambe le impostazioni vengono salvate con il progetto e incluse nel JSON
+esportato.
+
+### Larghezza delle colonne
+
+Nell'intestazione della tabella, trascina il bordo destro di una colonna per
+allargarla o restringerla. Il cursore diventa una doppia freccia quando sei sul
+bordo. Fai **doppio clic** sul bordo, oppure usa **Ripristina colonne** in basso a
+destra, per tornare alle larghezze predefinite. La scelta viene ricordata nel browser
+e non modifica il file del progetto.
+
 ### Scorciatoie
 
 | Tasto | Azione |
@@ -121,12 +150,18 @@ Il file esportato è JSON e può essere reimportato con il pulsante **Importa**:
 ```json
 {
   "format": "ganttflow-project",
-  "version": 2,
-  "exportedAt": "2026-11-10T08:04:57.146Z",
+  "version": 3,
+  "exportedAt": "2026-11-11T09:30:00.000Z",
   "project": {
     "name": "Lancio nuovo sito web",
     "createdAt": "2026-11-10T08:00:00.000Z",
-    "updatedAt": "2026-11-10T08:00:00.000Z",
+    "updatedAt": "2026-11-11T09:30:00.000Z",
+    "hiddenRanges": [
+      { "start": "2026-12-24", "end": "2026-12-27" }
+    ],
+    "customHolidays": [
+      { "date": "2026-12-07", "name": "Chiusura aziendale" }
+    ],
     "tasks": [
       {
         "id": "t9e17ounkti",
@@ -155,6 +190,17 @@ Il file esportato è JSON e può essere reimportato con il pulsante **Importa**:
 - `countSat`, `countSun`, `countHol`: se `true`, sabati, domeniche e festivi contano
   nella durata; se assenti o `false`, vengono saltati. Nei file precedenti alla
   versione 2 le spunte sono assenti e quindi i giorni vengono saltati.
+- `hiddenRanges` elenca i periodi nascosti dal diagramma: ogni voce ha `start` e `end`
+  inclusivi. Influisce solo sulla visualizzazione (schermo e PDF): le date e le durate
+  delle attività restano invariate. In importazione gli intervalli invertiti vengono
+  scambiati, quelli sovrapposti o adiacenti uniti e l'elenco è limitato a 50 voci.
+- `customHolidays` elenca i giorni rossi personalizzati: `date` e `name` (nome
+  facoltativo, sostituito da "Festivo personalizzato" se vuoto). Si comportano come i
+  festivi italiani: rossi nel calendario e nel PDF, saltati nella durata quando la
+  spunta **Fest** è vuota. In importazione le date non valide e i duplicati vengono
+  scartati, l'elenco è ordinato e limitato a 200 voci.
+- I file delle versioni precedenti (senza questi campi) si importano normalmente: i due
+  elenchi vengono creati vuoti.
 - In importazione i dati vengono validati: id non validi rigenerati, riferimenti
   inesistenti rimossi, durate e lag limitati ai valori ammessi, `link` sconosciuti
   riportati a `FS`.
@@ -167,7 +213,9 @@ la tabella delle attività (numero, nome, giorni, inizio, fine, colonna **Vincol
 con tipo e numero dell'attività collegata) e le barre sul calendario, con paginazione
 automatica quando le attività superano lo spazio disponibile (circa 30 righe per
 pagina, formato A4 orizzontale). Nel calendario i fine settimana sono evidenziati in
-arancione e i festivi italiani in rosso, con legenda a piè di pagina.
+arancione e i festivi (italiani e personalizzati) in rosso, con legenda a piè di
+pagina. I periodi nascosti vengono compattati anche nel PDF e indicati nella legenda;
+l'intestazione riporta quanti giorni sono stati nascosti.
 
 ## Struttura del progetto
 

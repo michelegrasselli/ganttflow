@@ -23,8 +23,13 @@
   };
   var LINK_ORDER = ['FS', 'SS', 'FF'];
   var STORAGE_KEY = 'ganttflow.project.v1';
+  var LAYOUT_KEY = 'ganttflow.layout.v1';
   var MAX_TASKS = 500;
   var MAX_DURATION = 3650;
+  var MAX_HIDDEN = 50;
+  var MAX_CUSTOM = 200;
+  var COL_MIN = [80, 34, 76, 76, 118, 36, 54, 48];
+  var COL_MAX = [640, 160, 260, 260, 420, 120, 180, 120];
   var DAY_MS = 86400000;
   var WD = ['dom', 'lun', 'mar', 'mer', 'gio', 'ven', 'sab'];
   var MONTHS = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
@@ -50,15 +55,19 @@
     selectedId: null
   };
   var range = null;
+  var timeMap = null;
   var headerSig = '';
   var saveTimer = null;
   var colorCursor = 0;
+  var customHolidayIndex = {};
+  var colDrag = null;
 
   /* --------------------------- riferimenti DOM --------------------------- */
   var board, grid, emptyEl, statsbar, headerRow, headTimeline, linksSvg;
   var saveStatusEl, toastWrapEl, projectNameEl, projectMetaEl;
   var modalEl, modalTitleEl, modalTextEl, modalOkEl, modalCancelEl, modalIconEl;
   var tlChip, tlChipText, chipRaf = 0;
+  var hideStartEl, hideEndEl, hiddenChipsEl, customDateEl, customNameEl, customChipsEl;
 
   /* ============================================================
      UTILITÀ
@@ -129,9 +138,23 @@
     holidayCache[year] = map;
     return map;
   }
-  function holidayName(iso) {
+  function builtinHolidayName(iso) {
     if (!isISO(iso)) return null;
     return holidaysForYear(+iso.slice(0, 4))[iso] || null;
+  }
+  function customIndexFrom(list) {
+    var map = {};
+    (Array.isArray(list) ? list : []).forEach(function (d) {
+      if (d && isISO(d.date)) map[d.date] = typeof d.name === 'string' && d.name.trim() ? d.name.trim() : 'Festivo personalizzato';
+    });
+    return map;
+  }
+  function rebuildHolidayIndex() {
+    customHolidayIndex = customIndexFrom(state.project ? state.project.customHolidays : []);
+  }
+  function holidayName(iso) {
+    if (!isISO(iso)) return null;
+    return customHolidayIndex[iso] || builtinHolidayName(iso);
   }
   function isWeekend(iso) {
     var wd = dayOfWeek(iso);
@@ -252,9 +275,56 @@
   /* ============================================================
      MODELLO
      ============================================================ */
+  function normalizeHiddenRanges(raw) {
+    var ranges = [];
+    (Array.isArray(raw) ? raw : []).forEach(function (r) {
+      var a = null, b = null;
+      if (typeof r === 'string') { a = b = r; }
+      else if (r && typeof r === 'object') { a = r.start; b = r.end || r.start; }
+      if (!isISO(a) || !isISO(b)) return;
+      if (a > b) { var tmp = a; a = b; b = tmp; }
+      ranges.push({ start: a, end: b });
+    });
+    ranges.sort(function (x, y) { return x.start < y.start ? -1 : (x.start > y.start ? 1 : 0); });
+    var out = [];
+    ranges.forEach(function (r) {
+      var last = out[out.length - 1];
+      if (last && diffDays(last.end, r.start) <= 1) {
+        if (r.end > last.end) last.end = r.end;
+      } else {
+        out.push({ start: r.start, end: r.end });
+      }
+    });
+    return out.slice(0, MAX_HIDDEN);
+  }
+
+  function normalizeCustomHolidays(raw) {
+    var map = {};
+    (Array.isArray(raw) ? raw : []).forEach(function (item) {
+      var date = null, name = '';
+      if (typeof item === 'string') date = item;
+      else if (item && typeof item === 'object') { date = item.date || item.start || item.end; name = item.name; }
+      if (!isISO(date) || map[date]) return;
+      name = typeof name === 'string' ? name.trim().slice(0, 60) : '';
+      map[date] = { date: date, name: name || 'Festivo personalizzato' };
+    });
+    return Object.keys(map).sort().map(function (d) { return map[d]; }).slice(0, MAX_CUSTOM);
+  }
+
+  function hiddenRanges() {
+    return state.project && Array.isArray(state.project.hiddenRanges) ? state.project.hiddenRanges : [];
+  }
+
   function makeProject(name, tasks) {
     var now = new Date().toISOString();
-    return { name: name || 'Nuovo progetto', createdAt: now, updatedAt: now, tasks: tasks || [] };
+    return {
+      name: name || 'Nuovo progetto',
+      createdAt: now,
+      updatedAt: now,
+      tasks: tasks || [],
+      hiddenRanges: [],
+      customHolidays: []
+    };
   }
 
   function nextColor() {
@@ -315,6 +385,7 @@
   function recalc() {
     var list = tasks();
     if (!list.length) return;
+    rebuildHolidayIndex();
     var map = {};
     list.forEach(function (t) { map[t.id] = t; });
 
@@ -372,53 +443,62 @@
       throw new Error('Formato non valido: manca l\'elenco delle attività.');
     }
     var now = new Date().toISOString();
+    var customs = normalizeCustomHolidays(raw.customHolidays);
     var project = {
       name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim().slice(0, 80) : 'Progetto importato',
       createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : now,
       updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : now,
-      tasks: []
+      tasks: [],
+      hiddenRanges: normalizeHiddenRanges(raw.hiddenRanges),
+      customHolidays: customs
     };
-    var ids = {};
-    raw.tasks.slice(0, MAX_TASKS).forEach(function (src, i) {
-      if (!src || typeof src !== 'object') return;
-      var id = typeof src.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(src.id) ? src.id : uid();
-      while (ids[id]) id = uid();
-      ids[id] = true;
-      var flags = {
-        countSat: src.countSat === true,
-        countSun: src.countSun === true,
-        countHol: src.countHol === true
-      };
-      var start = nextCounted(isISO(src.start) ? src.start : todayISO(), flags);
-      var duration = clampInt(src.duration, 1, MAX_DURATION, 0);
-      var end = isISO(src.end) ? prevCounted(src.end, flags) : null;
-      if (!duration) {
-        duration = end && diffDays(start, end) >= 0
-          ? Math.max(1, countDays(start, end, flags))
-          : 1;
-      }
-      if (!end || diffDays(start, end) < 0) end = endFromStart(start, duration, flags);
-      project.tasks.push({
-        id: id,
-        name: typeof src.name === 'string' && src.name.trim() ? src.name.trim().slice(0, 120) : 'Attività ' + (i + 1),
-        start: start,
-        end: end,
-        duration: duration,
-        color: hexColor(src.color) || PALETTE[i % PALETTE.length],
-        predecessorId: typeof src.predecessorId === 'string' ? src.predecessorId : null,
-        link: LINK_TYPES[src.link] ? src.link : 'FS',
-        lag: clampInt(src.lag, 0, 365, 0),
-        countSat: flags.countSat,
-        countSun: flags.countSun,
-        countHol: flags.countHol
+    var previousIndex = customHolidayIndex;
+    customHolidayIndex = customIndexFrom(customs);
+    try {
+      var ids = {};
+      raw.tasks.slice(0, MAX_TASKS).forEach(function (src, i) {
+        if (!src || typeof src !== 'object') return;
+        var id = typeof src.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(src.id) ? src.id : uid();
+        while (ids[id]) id = uid();
+        ids[id] = true;
+        var flags = {
+          countSat: src.countSat === true,
+          countSun: src.countSun === true,
+          countHol: src.countHol === true
+        };
+        var start = nextCounted(isISO(src.start) ? src.start : todayISO(), flags);
+        var duration = clampInt(src.duration, 1, MAX_DURATION, 0);
+        var end = isISO(src.end) ? prevCounted(src.end, flags) : null;
+        if (!duration) {
+          duration = end && diffDays(start, end) >= 0
+            ? Math.max(1, countDays(start, end, flags))
+            : 1;
+        }
+        if (!end || diffDays(start, end) < 0) end = endFromStart(start, duration, flags);
+        project.tasks.push({
+          id: id,
+          name: typeof src.name === 'string' && src.name.trim() ? src.name.trim().slice(0, 120) : 'Attività ' + (i + 1),
+          start: start,
+          end: end,
+          duration: duration,
+          color: hexColor(src.color) || PALETTE[i % PALETTE.length],
+          predecessorId: typeof src.predecessorId === 'string' ? src.predecessorId : null,
+          link: LINK_TYPES[src.link] ? src.link : 'FS',
+          lag: clampInt(src.lag, 0, 365, 0),
+          countSat: flags.countSat,
+          countSun: flags.countSun,
+          countHol: flags.countHol
+        });
       });
-    });
-    var byId = {};
-    project.tasks.forEach(function (t) { byId[t.id] = t; });
-    project.tasks.forEach(function (t) {
-      if (t.predecessorId && !byId[t.predecessorId]) t.predecessorId = null;
-      if (t.predecessorId === t.id) t.predecessorId = null;
-    });
+      var byId = {};
+      project.tasks.forEach(function (t) { byId[t.id] = t; });
+      project.tasks.forEach(function (t) {
+        if (t.predecessorId && !byId[t.predecessorId]) t.predecessorId = null;
+        if (t.predecessorId === t.id) t.predecessorId = null;
+      });
+    } finally {
+      customHolidayIndex = previousIndex;
+    }
     return project;
   }
 
@@ -482,6 +562,13 @@
       } else {
         c.textContent = label;
       }
+      if (i < labels.length) {
+        var rz = el('span', 'col-resizer');
+        rz.dataset.col = String(i);
+        rz.title = 'Trascina per allargare o restringere la colonna · doppio clic per ripristinare';
+        rz.setAttribute('aria-hidden', 'true');
+        c.appendChild(rz);
+      }
       headFields.appendChild(c);
     });
     head.appendChild(headFields);
@@ -506,6 +593,88 @@
     linksSvg.setAttribute('class', 'links');
     linksSvg.setAttribute('aria-hidden', 'true');
     grid.appendChild(linksSvg);
+  }
+
+  function readSavedColumns() {
+    try {
+      var raw = localStorage.getItem(LAYOUT_KEY);
+      if (!raw) return null;
+      var data = JSON.parse(raw);
+      var widths = data && Array.isArray(data.widths) ? data.widths : null;
+      if (!widths || widths.length !== 8) return null;
+      var ok = true;
+      var clean = widths.map(function (w, i) {
+        var n = Number(w);
+        if (!Number.isFinite(n)) { ok = false; return COL_MIN[i]; }
+        return Math.max(COL_MIN[i], Math.min(COL_MAX[i], n));
+      });
+      return ok ? clean : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function currentColumnWidths() {
+    var fields = grid.querySelector('.row-head .fields');
+    if (fields) {
+      var parts = getComputedStyle(fields).gridTemplateColumns.split(/\s+/).map(parseFloat)
+        .filter(function (n) { return Number.isFinite(n); });
+      if (parts.length === 8) return parts;
+    }
+    return [121, 46, 104, 104, 168, 44, 64, 60];
+  }
+  function applyColumnWidths(widths) {
+    var clean = widths.map(function (w, i) {
+      return Math.max(COL_MIN[i], Math.min(COL_MAX[i], Math.round(w * 10) / 10));
+    });
+    var sum = clean.reduce(function (a, b) { return a + b; }, 0);
+    state.columnWidths = clean;
+    grid.style.setProperty('--colw', clean.map(function (w) { return w + 'px'; }).join(' '));
+    document.documentElement.style.setProperty('--left-w', (Math.round(sum * 10) / 10) + 'px');
+  }
+  function persistColumnWidths() {
+    if (!state.columnWidths) return;
+    try { localStorage.setItem(LAYOUT_KEY, JSON.stringify({ widths: state.columnWidths })); } catch (e) { /* ignore */ }
+  }
+  function resetColumnWidths() {
+    state.columnWidths = null;
+    try { localStorage.removeItem(LAYOUT_KEY); } catch (e) { /* ignore */ }
+    grid.style.removeProperty('--colw');
+    document.documentElement.style.removeProperty('--left-w');
+    renderLinks();
+    updateMonthChip();
+    toast('Larghezza colonne ripristinata.');
+  }
+  function initColumnLayout() {
+    var saved = readSavedColumns();
+    if (saved) applyColumnWidths(saved);
+  }
+  function onColMouseDown(e) {
+    var rz = e.target.closest ? e.target.closest('.col-resizer') : null;
+    if (!rz || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    colDrag = {
+      index: +rz.dataset.col,
+      startX: e.clientX,
+      widths: currentColumnWidths()
+    };
+    document.body.classList.add('col-resizing');
+  }
+  function onColMouseMove(e) {
+    if (!colDrag) return;
+    e.preventDefault();
+    var widths = colDrag.widths.slice();
+    var i = colDrag.index;
+    widths[i] = colDrag.widths[i] + (e.clientX - colDrag.startX);
+    applyColumnWidths(widths);
+  }
+  function onColMouseUp() {
+    if (!colDrag) return;
+    colDrag = null;
+    document.body.classList.remove('col-resizing');
+    persistColumnWidths();
+    renderLinks();
+    updateMonthChip();
   }
 
   function buildTaskRow(t) {
@@ -681,37 +850,111 @@
     return { start: start, end: end, days: diffDays(start, end) + 1 };
   }
 
+  /* Mappa i giorni di calendario sulla timeline: i periodi nascosti
+     vengono omessi e non occupano larghezza. */
+  function isHiddenIn(iso, list) {
+    list = list || hiddenRanges();
+    for (var i = 0; i < list.length; i++) {
+      if (iso < list[i].start) return false;
+      if (iso <= list[i].end) return true;
+    }
+    return false;
+  }
+  function countVisibleBetween(a, b, list) {
+    if (!isISO(a) || !isISO(b) || diffDays(a, b) < 0) return 0;
+    var n = 0, cur = a, guard = 0;
+    while (cur <= b && guard++ < 40000) {
+      if (!isHiddenIn(cur, list)) n++;
+      cur = addDays(cur, 1);
+    }
+    return n;
+  }
+  function buildTimeMap() {
+    if (!range) {
+      timeMap = null;
+      return null;
+    }
+    var px = ZOOMS[state.zoom].px;
+    var hidden = hiddenRanges();
+    var prefix = new Array(range.days + 1);
+    var visible = [];
+    var ri = 0;
+    prefix[0] = 0;
+    for (var i = 0; i < range.days; i++) {
+      var iso = addDays(range.start, i);
+      while (ri < hidden.length && hidden[ri].end < iso) ri++;
+      var isHidden = ri < hidden.length && hidden[ri].start <= iso && iso <= hidden[ri].end;
+      if (!isHidden) visible.push(iso);
+      prefix[i + 1] = visible.length;
+    }
+    timeMap = {
+      start: range.start,
+      days: range.days,
+      prefix: prefix,
+      visible: visible,
+      count: visible.length,
+      px: px
+    };
+    return timeMap;
+  }
+  function visIndex(iso) {
+    if (!timeMap) return 0;
+    var d = diffDays(timeMap.start, iso);
+    if (d < 0) d = 0;
+    if (d > timeMap.days) d = timeMap.days;
+    return timeMap.prefix[d];
+  }
+  function xOf(iso) {
+    return timeMap ? visIndex(iso) * timeMap.px : 0;
+  }
+  function hiddenSig() {
+    return hiddenRanges().map(function (r) { return r.start + '~' + r.end; }).join(',');
+  }
+
+  function dayGradient() {
+    if (!timeMap) return 'linear-gradient(90deg, transparent, transparent)';
+    var list = timeMap.visible;
+    var px = timeMap.px;
+    var count = list.length;
+    if (!count) return 'linear-gradient(90deg, transparent, transparent)';
+    function colorOf(iso) {
+      if (holidayName(iso)) return 'rgba(239, 68, 68, .18)';
+      if (isWeekend(iso)) return 'rgba(249, 115, 22, .15)';
+      return null;
+    }
+    var stops = ['transparent 0px'];
+    var k = 0;
+    while (k < count) {
+      var color = colorOf(list[k]);
+      if (!color) { k++; continue; }
+      var a = k;
+      while (k + 1 < count && colorOf(list[k + 1]) === color) k++;
+      var b = k;
+      stops.push('transparent ' + (a * px) + 'px');
+      stops.push(color + ' ' + (a * px) + 'px');
+      stops.push(color + ' ' + ((b + 1) * px) + 'px');
+      stops.push('transparent ' + ((b + 1) * px) + 'px');
+      k++;
+    }
+    stops.push('transparent ' + (count * px) + 'px');
+    return 'linear-gradient(90deg, ' + stops.join(', ') + ')';
+  }
+
   function renderTimelineHeader(force) {
     range = computeRange();
+    buildTimeMap();
     var zoom = ZOOMS[state.zoom];
     var px = zoom.px;
-    var tlW = range.days * px;
+    var tlW = timeMap.count * px;
     var compact = px < 14;
 
     grid.classList.toggle('compact', compact);
     grid.style.setProperty('--px', px + 'px');
     grid.style.setProperty('--tl-w', tlW + 'px');
-
-    var dow = dayOfWeek(range.start);
-    var sat = (6 - dow + 7) % 7;
-    var sun = (sat + 1) % 7;
-    grid.style.setProperty('--sat', sat);
-    grid.style.setProperty('--sun', sun);
     grid.style.setProperty('--dayline', px >= 14 ? 'rgba(148, 163, 184, .2)' : 'transparent');
+    grid.style.setProperty('--day-bg', dayGradient());
 
-    var stops = ['transparent 0px'];
-    for (var hi = 0; hi < range.days; hi++) {
-      if (!holidayName(addDays(range.start, hi))) continue;
-      var ha = hi * px, hb = (hi + 1) * px;
-      stops.push('transparent ' + ha + 'px');
-      stops.push('rgba(239, 68, 68, .18) ' + ha + 'px');
-      stops.push('rgba(239, 68, 68, .18) ' + hb + 'px');
-      stops.push('transparent ' + hb + 'px');
-    }
-    stops.push('transparent ' + tlW + 'px');
-    grid.style.setProperty('--hol-bg', 'linear-gradient(90deg, ' + stops.join(', ') + ')');
-
-    var sig = range.start + '|' + range.end + '|' + state.zoom;
+    var sig = range.start + '|' + range.end + '|' + state.zoom + '|' + timeMap.count + '|' + hiddenSig();
     if (!force && sig === headerSig) return;
     headerSig = sig;
 
@@ -723,13 +966,16 @@
       var mEnd = endOfMonth(cursor);
       var a = cursor > mStart ? cursor : mStart;
       var b = mEnd < range.end ? mEnd : range.end;
-      var count = diffDays(a, b) + 1;
-      var d = parseISO(a);
-      var label = MONTHS[d.getUTCMonth()] + ' ' + d.getUTCFullYear();
-      var m = el('div', 'month', label.charAt(0).toUpperCase() + label.slice(1));
-      m.style.width = (count * px) + 'px';
-      m.title = label.charAt(0).toUpperCase() + label.slice(1) + ' — ' + count + ' giorni';
-      months.appendChild(m);
+      var count = visIndex(addDays(b, 1)) - visIndex(a);
+      if (count > 0) {
+        var d = parseISO(a);
+        var label = MONTHS[d.getUTCMonth()] + ' ' + d.getUTCFullYear();
+        label = label.charAt(0).toUpperCase() + label.slice(1);
+        var m = el('div', 'month', label);
+        m.style.width = (count * px) + 'px';
+        m.title = label + ' — ' + count + (count === 1 ? ' giorno visibile' : ' giorni visibili');
+        months.appendChild(m);
+      }
       cursor = addDays(b, 1);
     }
     headTimeline.appendChild(months);
@@ -737,8 +983,8 @@
     if (!compact) {
       var days = el('div', 'days');
       var today = todayISO();
-      for (var i = 0; i < range.days; i++) {
-        var iso = addDays(range.start, i);
+      for (var i = 0; i < timeMap.visible.length; i++) {
+        var iso = timeMap.visible[i];
         var dd = parseISO(iso);
         var wd = dd.getUTCDay();
         var hol = holidayName(iso);
@@ -757,16 +1003,19 @@
 
   function renderBars() {
     if (!range) return;
-    var px = ZOOMS[state.zoom].px;
+    if (!timeMap) buildTimeMap();
+    var px = timeMap.px;
     var rows = {};
     grid.querySelectorAll('.row.task').forEach(function (r) { rows[r.dataset.id] = r; });
     tasks().forEach(function (t) {
       var row = rows[t.id];
       if (!row) return;
       var bar = row.querySelector('.bar');
-      var span = diffDays(t.start, t.end) + 1;
-      var w = Math.max(4, span * px - 2);
-      bar.style.left = (diffDays(range.start, t.start) * px + 1) + 'px';
+      var x0 = xOf(t.start);
+      var x1 = xOf(addDays(t.end, 1));
+      var w = Math.max(4, x1 - x0 - 2);
+      var maxLeft = Math.max(0, timeMap.count * px - 4);
+      bar.style.left = Math.min(x0 + 1, maxLeft) + 'px';
       bar.style.width = w + 'px';
       bar.style.background = t.color;
       bar.classList.toggle('light', isLight(t.color));
@@ -784,10 +1033,11 @@
 
   function renderLinks() {
     if (!linksSvg || !range) return;
-    var px = ZOOMS[state.zoom].px;
+    if (!timeMap) buildTimeMap();
+    var px = timeMap.px;
     var headH = headerRow ? headerRow.offsetHeight : 54;
     var totalH = tasks().length * ROW_H;
-    var width = range.days * px;
+    var width = timeMap.count * px;
     linksSvg.setAttribute('width', width);
     linksSvg.setAttribute('height', totalH);
     linksSvg.style.width = width + 'px';
@@ -800,14 +1050,15 @@
     while (cursor <= range.end) {
       var next = addDays(endOfMonth(cursor), 1);
       if (next > range.end) break;
-      var x = diffDays(range.start, next) * px;
+      var x = xOf(next);
       out += '<line x1="' + x + '" y1="0" x2="' + x + '" y2="' + totalH + '" stroke="rgba(100,116,139,.22)" stroke-width="1"></line>';
       cursor = next;
     }
 
-    var ti = diffDays(range.start, todayISO());
-    if (ti >= 0 && ti < range.days) {
-      var tx = (ti + 0.5) * px;
+    var today = todayISO();
+    var ti = diffDays(range.start, today);
+    if (ti >= 0 && ti < range.days && !isHiddenIn(today, hiddenRanges())) {
+      var tx = xOf(today) + 0.5 * px;
       out += '<line x1="' + tx + '" y1="0" x2="' + tx + '" y2="' + totalH + '" stroke="#ef4444" stroke-width="1.6" stroke-dasharray="4 3" opacity=".62"></line>';
     }
 
@@ -817,10 +1068,10 @@
       if (!t.predecessorId) return;
       var p = taskById(t.predecessorId);
       if (!p || idx[p.id] === undefined || idx[t.id] === undefined) return;
-      var pStartX = diffDays(range.start, p.start) * px + 1;
-      var pEndX = (diffDays(range.start, p.end) + 1) * px;
-      var tStartX = diffDays(range.start, t.start) * px + 1;
-      var tEndX = (diffDays(range.start, t.end) + 1) * px;
+      var pStartX = xOf(p.start) + 1;
+      var pEndX = xOf(addDays(p.end, 1));
+      var tStartX = xOf(t.start) + 1;
+      var tEndX = xOf(addDays(t.end, 1));
       var x1 = t.link === 'SS' ? pStartX : pEndX;
       var x2 = t.link === 'FF' ? tEndX : tStartX;
       var y1 = idx[p.id] * ROW_H + ROW_H / 2;
@@ -926,6 +1177,7 @@
     updateStats();
     updateZoomLabel();
     updateMonthChip();
+    renderCalendarPanel();
     board.scrollTop = st;
     board.scrollLeft = sl;
     if (opts.focusId) {
@@ -960,12 +1212,12 @@
 
   function updateMonthChip() {
     if (!tlChip) return;
-    if (!range || !tasks().length) { tlChip.style.display = 'none'; return; }
+    if (!range || !timeMap || !timeMap.visible.length || !tasks().length) { tlChip.style.display = 'none'; return; }
     tlChip.style.display = '';
-    var px = ZOOMS[state.zoom].px;
+    var px = timeMap.px;
     var idx = Math.floor(Math.max(0, board.scrollLeft) / px);
-    idx = Math.max(0, Math.min(range.days - 1, idx));
-    var d = parseISO(addDays(range.start, idx));
+    idx = Math.max(0, Math.min(timeMap.visible.length - 1, idx));
+    var d = parseISO(timeMap.visible[idx]);
     var month = MONTHS[d.getUTCMonth()];
     tlChipText.textContent = month.charAt(0).toUpperCase() + month.slice(1) + ' ' + d.getUTCFullYear();
   }
@@ -978,9 +1230,9 @@
     return Math.max(120, board.clientWidth - leftWidth());
   }
   function scrollToDate(iso, smooth) {
-    if (!range) return;
-    var px = ZOOMS[state.zoom].px;
-    var x = (diffDays(range.start, iso) + 0.5) * px;
+    if (!range || !timeMap) return;
+    var px = timeMap.px;
+    var x = xOf(iso) + 0.5 * px;
     var maxScroll = Math.max(0, board.scrollWidth - board.clientWidth);
     var target = x - visibleTimelineWidth() / 2;
     target = Math.max(0, Math.min(target, maxScroll));
@@ -988,12 +1240,12 @@
     else board.scrollLeft = target;
   }
   function dateAtCenter() {
-    if (!range) return todayISO();
-    var px = ZOOMS[state.zoom].px;
+    if (!range || !timeMap || !timeMap.visible.length) return todayISO();
+    var px = timeMap.px;
     var x = board.scrollLeft + visibleTimelineWidth() / 2;
     var idx = Math.floor(x / px);
-    idx = Math.max(0, Math.min(range.days - 1, idx));
-    return addDays(range.start, idx);
+    idx = Math.max(0, Math.min(timeMap.visible.length - 1, idx));
+    return timeMap.visible[idx];
   }
   function setZoom(delta) {
     var center = dateAtCenter();
@@ -1093,6 +1345,126 @@
     });
   }
 
+  /* ---------------- calendario personalizzato ---------------- */
+  function renderCalendarPanel() {
+    if (!hiddenChipsEl || !customChipsEl) return;
+
+    hiddenChipsEl.textContent = '';
+    var ranges = hiddenRanges();
+    if (!ranges.length) {
+      hiddenChipsEl.appendChild(el('span', 'cal-empty', 'Nessun periodo nascosto'));
+    } else {
+      ranges.forEach(function (r) {
+        var chip = el('span', 'chip chip-hidden');
+        var label = r.start === r.end
+          ? fmtShort(r.start) + ' ' + r.start.slice(0, 4)
+          : fmtShort(r.start) + ' – ' + fmtShort(r.end) + ' ' + r.end.slice(0, 4);
+        chip.appendChild(el('span', '', label));
+        var x = el('button', 'chip-x', '×');
+        x.type = 'button';
+        x.title = 'Mostra di nuovo questo periodo';
+        x.setAttribute('aria-label', 'Rimuovi il periodo nascosto ' + label);
+        x.addEventListener('click', function () { removeHiddenRange(r.start, r.end); });
+        chip.appendChild(x);
+        hiddenChipsEl.appendChild(chip);
+      });
+    }
+
+    customChipsEl.textContent = '';
+    var customs = state.project && Array.isArray(state.project.customHolidays) ? state.project.customHolidays : [];
+    if (!customs.length) {
+      customChipsEl.appendChild(el('span', 'cal-empty', 'Nessun giorno rosso personalizzato'));
+    } else {
+      customs.forEach(function (d) {
+        var chip = el('span', 'chip chip-red');
+        chip.appendChild(el('span', '', fmtNum(d.date) + ' · ' + d.name));
+        var x = el('button', 'chip-x', '×');
+        x.type = 'button';
+        x.title = 'Rimuovi questo giorno rosso';
+        x.setAttribute('aria-label', 'Rimuovi il giorno rosso del ' + fmtNum(d.date));
+        x.addEventListener('click', function () { removeCustomHoliday(d.date); });
+        chip.appendChild(x);
+        customChipsEl.appendChild(chip);
+      });
+    }
+  }
+
+  function addHiddenRange() {
+    if (!hideStartEl || !hideEndEl) return;
+    var a = hideStartEl.value, b = hideEndEl.value;
+    if (!isISO(a) || !isISO(b)) {
+      toast('Indica inizio e fine del periodo da nascondere.', { type: 'error' });
+      return;
+    }
+    if (a > b) { var tmp = a; a = b; b = tmp; }
+    if (diffDays(a, b) > MAX_DURATION) {
+      toast('Il periodo da nascondere è troppo lungo.', { type: 'error' });
+      return;
+    }
+    var proposed = normalizeHiddenRanges(hiddenRanges().concat([{ start: a, end: b }]));
+    var r = computeRange();
+    if (countVisibleBetween(r.start, r.end, proposed) <= 0) {
+      toast('Il periodo nasconde tutte le date del diagramma: riduci l’intervallo.', { type: 'error' });
+      return;
+    }
+    state.project.hiddenRanges = proposed;
+    hideStartEl.value = '';
+    hideEndEl.value = '';
+    headerSig = '';
+    renderAll();
+    toast('Periodo nascosto dal diagramma: le date non occupano più spazio.');
+  }
+
+  function removeHiddenRange(start, end) {
+    state.project.hiddenRanges = hiddenRanges().filter(function (r) {
+      return !(r.start === start && r.end === end);
+    });
+    headerSig = '';
+    renderAll();
+    toast('Periodo di nuovo visibile nel diagramma.');
+  }
+
+  function addCustomHoliday() {
+    if (!customDateEl) return;
+    var date = customDateEl.value;
+    if (!isISO(date)) {
+      toast('Indica la data del giorno rosso da aggiungere.', { type: 'error' });
+      return;
+    }
+    var builtin = builtinHolidayName(date);
+    if (builtin) {
+      toast('Il ' + fmtNum(date) + ' è già un festivo italiano (' + builtin + ').', { type: 'error' });
+      return;
+    }
+    if (customHolidayIndex[date]) {
+      toast('Il ' + fmtNum(date) + ' è già tra i giorni rossi personalizzati.', { type: 'error' });
+      return;
+    }
+    var current = normalizeCustomHolidays(state.project.customHolidays || []);
+    if (current.length >= MAX_CUSTOM) {
+      toast('Limite di ' + MAX_CUSTOM + ' giorni rossi personalizzati raggiunto.', { type: 'error' });
+      return;
+    }
+    var name = (customNameEl.value || '').trim().slice(0, 60) || 'Festivo personalizzato';
+    state.project.customHolidays = normalizeCustomHolidays(current.concat([{ date: date, name: name }]));
+    rebuildHolidayIndex();
+    customDateEl.value = '';
+    customNameEl.value = '';
+    headerSig = '';
+    renderAll();
+    toast('Giorno rosso aggiunto: le durate sono state ricalcolate.');
+  }
+
+  function removeCustomHoliday(date) {
+    state.project.customHolidays = (state.project.customHolidays || []).filter(function (d) {
+      return d.date !== date;
+    });
+    rebuildHolidayIndex();
+    headerSig = '';
+    renderAll();
+    toast('Giorno rosso rimosso: le durate sono state ricalcolate.');
+  }
+
   function changeProject() {
     if (!tasks().length) {
       newProject();
@@ -1112,6 +1484,7 @@
     state.project = makeProject('Nuovo progetto', []);
     state.selectedId = null;
     headerSig = '';
+    rebuildHolidayIndex();
     syncProjectName();
     renderAll();
     scrollToDate(todayISO());
@@ -1125,6 +1498,7 @@
     state.selectedId = null;
     colorCursor = state.project.tasks.length;
     headerSig = '';
+    rebuildHolidayIndex();
     syncProjectName();
     renderAll();
     scrollToDate(tasks()[0] ? tasks()[0].start : todayISO());
@@ -1135,7 +1509,7 @@
     saveNow();
     var payload = {
       format: 'ganttflow-project',
-      version: 2,
+      version: 3,
       exportedAt: new Date().toISOString(),
       project: state.project
     };
@@ -1176,6 +1550,7 @@
         state.selectedId = null;
         colorCursor = p.tasks.length;
         headerSig = '';
+        rebuildHolidayIndex();
         syncProjectName();
         renderAll();
         scrollToDate(tasks()[0] ? tasks()[0].start : todayISO());
@@ -1410,6 +1785,12 @@
   }
 
   function onGridDoubleClick(e) {
+    var rz = e.target.closest('.col-resizer');
+    if (rz) {
+      e.preventDefault();
+      resetColumnWidths();
+      return;
+    }
     var bar = e.target.closest('.bar');
     if (!bar) return;
     var row = bar.closest('.row.task');
@@ -1424,6 +1805,10 @@
     grid.addEventListener('change', onGridChange);
     grid.addEventListener('click', onGridClick);
     grid.addEventListener('dblclick', onGridDoubleClick);
+    grid.addEventListener('mousedown', onColMouseDown);
+    document.addEventListener('mousemove', onColMouseMove);
+    document.addEventListener('mouseup', onColMouseUp);
+    window.addEventListener('blur', onColMouseUp);
     grid.addEventListener('focusin', function (e) {
       var row = e.target.closest('.row.task');
       if (row) selectTask(row.dataset.id);
@@ -1453,6 +1838,19 @@
     fileInput.addEventListener('change', function () {
       if (fileInput.files && fileInput.files[0]) importFile(fileInput.files[0]);
       fileInput.value = '';
+    });
+
+    var btnHide = document.getElementById('btnHideRange');
+    if (btnHide) btnHide.addEventListener('click', addHiddenRange);
+    var btnCustom = document.getElementById('btnAddCustom');
+    if (btnCustom) btnCustom.addEventListener('click', addCustomHoliday);
+    var btnResetCols = document.getElementById('btnResetCols');
+    if (btnResetCols) btnResetCols.addEventListener('click', resetColumnWidths);
+    [hideStartEl, hideEndEl].forEach(function (inp) {
+      if (inp) inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); addHiddenRange(); } });
+    });
+    [customDateEl, customNameEl].forEach(function (inp) {
+      if (inp) inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); addCustomHoliday(); } });
     });
 
     projectNameEl.addEventListener('input', function () {
@@ -1533,14 +1931,22 @@
     modalIconEl = document.getElementById('modalIcon');
     tlChip = document.getElementById('tlChip');
     tlChipText = document.getElementById('tlChipText');
+    hideStartEl = document.getElementById('hideStart');
+    hideEndEl = document.getElementById('hideEnd');
+    hiddenChipsEl = document.getElementById('hiddenChips');
+    customDateEl = document.getElementById('customDate');
+    customNameEl = document.getElementById('customName');
+    customChipsEl = document.getElementById('customChips');
 
     var stored = readStoredProject();
     state.project = stored || demoProject();
     colorCursor = tasks().length;
     if (stored) state.project.name = state.project.name || 'Progetto senza titolo';
+    rebuildHolidayIndex();
     syncProjectName();
 
     bindEvents();
+    initColumnLayout();
     renderAll();
 
     requestAnimationFrame(function () {
