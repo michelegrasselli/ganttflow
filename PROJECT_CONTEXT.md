@@ -145,6 +145,11 @@ reimportabile.
 - **Calcolo tempo ciclo tra due fini** (fascia in basso): `|fine_B − fine_A|` tra due
   attività scelte; quota blu nel grafico; scelta salvata per pagina (`calcFrom`,
   `calcTo`) e riportata nel PDF.
+- **Divisore trascinabile** tra grafico e fascia di calcolo (min. 140 px al grafico,
+  doppio clic per ripristinare, frecce da tastiera); altezza salvata come preferenza
+  locale in `ganttflow.split.cycle.v1`.
+- Nota CSS: la classe di stato del risultato è `is-empty` per non collidere con `.empty`
+  dello stato vuoto (che impone `min-height: 420px`).
 - PDF in inglese con **tutte le pagine** in sequenza (`[sheet]` indica una pagina
   importata), file `<nome>-cycle-time-<data>.pdf`.
 

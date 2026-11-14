@@ -1430,9 +1430,51 @@ html.mode-cycle .row.task .cell-name { padding-left: 14px; }
   font-variant-numeric: tabular-nums;
   box-shadow: 0 6px 14px -10px rgba(79, 70, 229, .95);
 }
-.ctc-result.empty { background: #e2e8f0; color: #64748b; box-shadow: none; }
+.ctc-result.is-empty { background: #e2e8f0; color: #64748b; box-shadow: none; }
 .ctc-detail { font-size: 10.5px; color: #8794ab; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 200px; }
 @media (max-width: 980px) {
   .ctcalc { padding: 6px 10px 7px; }
   .ctc-sel { width: 180px; }
 }
+
+/* ---------------- divisore grafico / calcolo ---------------- */
+.split-handle {
+  flex: none;
+  position: relative;
+  height: 9px;
+  margin-top: -4px;
+  cursor: row-resize;
+  z-index: 5;
+  touch-action: none;
+}
+.split-handle span {
+  position: absolute;
+  left: 50%;
+  top: 3px;
+  width: 44px;
+  height: 4px;
+  margin-left: -22px;
+  border-radius: 4px;
+  background: #cbd5e1;
+  transition: background .12s, width .12s, margin-left .12s;
+}
+.split-handle::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 4px;
+  height: 1px;
+  background: transparent;
+  transition: background .12s;
+}
+.split-handle:hover span, .split-handle.active span, .split-handle:focus-visible span {
+  background: var(--accent);
+  width: 64px;
+  margin-left: -32px;
+}
+.split-handle:hover::before, .split-handle.active::before, .split-handle:focus-visible::before { background: rgba(79, 70, 229, .45); }
+.split-handle:focus-visible { outline: none; }
+body.split-resizing, body.split-resizing * { cursor: row-resize !important; user-select: none; }
+.ctcalc { align-content: flex-start; }
+.ctcalc.sized { overflow: auto; }

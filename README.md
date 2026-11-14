@@ -177,6 +177,12 @@ un'attività e «alla fine di» un'altra: il risultato è la differenza tra i lo
 di fine (es. fine n. 1 = 8 s → fine n. 4 = 39 s → **31 s**). Nel grafico compare una
 quota blu tra le due fini. La scelta è salvata per ogni pagina e riportata nel PDF.
 
+**Dividere lo spazio.** La barretta grigia sopra la fascia del calcolo si trascina in
+alto o in basso per dividere lo schermo tra grafico e calcolo (il grafico resta alto
+almeno 140 px). Doppio clic sulla barretta per tornare all'altezza minima; da tastiera
+`↑`/`↓` (con `Maiusc` a passi più grandi), `Home`/`Fine`. La divisione è una preferenza
+locale del browser e non entra nel file del progetto.
+
 **Pagine.** In basso, come in un foglio di calcolo, ci sono le linguette delle pagine:
 
 - **+** aggiunge una pagina; clic per aprirla; **doppio clic** (o `F2`) per rinominarla;

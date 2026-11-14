@@ -92,7 +92,10 @@
   var tlChip, tlChipText, chipRaf = 0;
   var hideStartEl, hideEndEl, hiddenChipsEl, customDateEl, customNameEl, customChipsEl;
   var sheetBarEl, sheetTabsEl, importSheetSel, typeModalEl, typeModalResolve = null;
-  var ctCalcEl, calcFromSel, calcToSel, calcResultEl, calcDetailEl;
+  var ctCalcEl, calcFromSel, calcToSel, calcResultEl, calcDetailEl, calcSplitEl;
+  var SPLIT_KEY = 'ganttflow.split.cycle.v1';
+  var BOARD_MIN_H = 140;
+  var splitDrag = null;
 
   /* ============================================================
      UTILITÀ
@@ -1322,8 +1325,13 @@
 
   function renderCycleCalc() {
     if (!ctCalcEl) return;
-    if (!isCycle()) { ctCalcEl.hidden = true; return; }
+    if (!isCycle()) {
+      ctCalcEl.hidden = true;
+      if (calcSplitEl) calcSplitEl.hidden = true;
+      return;
+    }
     ctCalcEl.hidden = false;
+    if (calcSplitEl) calcSplitEl.hidden = false;
     var sheet = activeSheet();
     [[calcFromSel, 'calcFrom'], [calcToSel, 'calcTo']].forEach(function (pair) {
       var sel = pair[0];
@@ -1337,7 +1345,7 @@
       sel.disabled = !sheet || !sheet.tasks.length;
     });
     var res = calcPair(sheet);
-    calcResultEl.classList.toggle('empty', !res || res.diff === null);
+    calcResultEl.classList.toggle('is-empty', !res || res.diff === null);
     if (!res || res.diff === null) {
       calcResultEl.textContent = '—';
       calcDetailEl.textContent = sheet && sheet.tasks.length >= 2
@@ -1348,6 +1356,81 @@
     calcResultEl.textContent = fmtSec(res.diff);
     calcDetailEl.textContent = 'fine n. ' + (indexById(res.a.id) + 1) + ' = ' + fmtSec(res.a.end) +
       '  →  fine n. ' + (indexById(res.b.id) + 1) + ' = ' + fmtSec(res.b.end);
+  }
+
+  /* ---------------- divisore grafico / calcolo ---------------- */
+  /* Altezza naturale del pannello di calcolo (senza altezza impostata). */
+  function calcNaturalHeight() {
+    var prev = ctCalcEl.style.height;
+    ctCalcEl.style.height = '';
+    var h = ctCalcEl.offsetHeight;
+    ctCalcEl.style.height = prev;
+    return h;
+  }
+  function calcHeightLimits() {
+    var min = calcNaturalHeight();
+    var current = ctCalcEl.offsetHeight;
+    var max = Math.max(min, current + board.offsetHeight - BOARD_MIN_H);
+    return { min: min, max: max };
+  }
+  function setCalcHeight(h, persist) {
+    if (!isCycle() || ctCalcEl.hidden) return;
+    var lim = calcHeightLimits();
+    if (h === null || h <= lim.min + 1) {
+      ctCalcEl.style.height = '';
+      ctCalcEl.classList.remove('sized');
+    } else {
+      h = Math.round(Math.min(lim.max, Math.max(lim.min, h)));
+      ctCalcEl.style.height = h + 'px';
+      ctCalcEl.classList.add('sized');
+    }
+    calcSplitEl.setAttribute('aria-valuenow', String(ctCalcEl.offsetHeight));
+    if (persist) {
+      try {
+        if (ctCalcEl.style.height) localStorage.setItem(SPLIT_KEY, JSON.stringify({ calcH: parseInt(ctCalcEl.style.height, 10) }));
+        else localStorage.removeItem(SPLIT_KEY);
+      } catch (e) { /* ignore */ }
+    }
+    renderLinks();
+    updateMonthChip();
+  }
+  function savedCalcHeight() {
+    try {
+      var d = JSON.parse(localStorage.getItem(SPLIT_KEY) || 'null');
+      return d && Number.isFinite(d.calcH) ? d.calcH : null;
+    } catch (e) { return null; }
+  }
+  function applySavedSplit() {
+    if (!ctCalcEl || ctCalcEl.hidden) return;
+    var h = savedCalcHeight();
+    if (h !== null) setCalcHeight(h, false);
+    else ctCalcEl.style.height = '';
+  }
+  function onSplitDown(e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    splitDrag = { startY: e.clientY, startH: ctCalcEl.offsetHeight };
+    document.body.classList.add('split-resizing');
+    calcSplitEl.classList.add('active');
+  }
+  function onSplitMove(e) {
+    if (!splitDrag) return;
+    e.preventDefault();
+    setCalcHeight(splitDrag.startH + (splitDrag.startY - e.clientY), false);
+  }
+  function onSplitUp() {
+    if (!splitDrag) return;
+    splitDrag = null;
+    document.body.classList.remove('split-resizing');
+    calcSplitEl.classList.remove('active');
+    setCalcHeight(ctCalcEl.style.height ? parseInt(ctCalcEl.style.height, 10) : null, true);
+  }
+  function onSplitKey(e) {
+    var step = e.shiftKey ? 60 : 20;
+    if (e.key === 'ArrowUp') { e.preventDefault(); setCalcHeight(ctCalcEl.offsetHeight + step, true); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); setCalcHeight(ctCalcEl.offsetHeight - step, true); }
+    else if (e.key === 'Home') { e.preventDefault(); setCalcHeight(null, true); }
+    else if (e.key === 'End') { e.preventDefault(); setCalcHeight(1e6, true); }
   }
 
   function onCalcChange(e) {
@@ -2096,6 +2179,7 @@
     renderCalendarPanel();
     renderSheetBar();
     renderCycleCalc();
+    applySavedSplit();
     board.scrollTop = st;
     board.scrollLeft = sl;
     if (opts.focusId) {
@@ -3104,6 +3188,12 @@
     window.addEventListener('blur', onRowDragEnd);
     calcFromSel.addEventListener('change', onCalcChange);
     calcToSel.addEventListener('change', onCalcChange);
+    calcSplitEl.addEventListener('mousedown', onSplitDown);
+    calcSplitEl.addEventListener('dblclick', function () { setCalcHeight(null, true); });
+    calcSplitEl.addEventListener('keydown', onSplitKey);
+    document.addEventListener('mousemove', onSplitMove);
+    document.addEventListener('mouseup', onSplitUp);
+    window.addEventListener('blur', onSplitUp);
     grid.addEventListener('focusin', function (e) {
       var row = e.target.closest('.row.task');
       if (row) selectTask(row.dataset.id);
@@ -3222,7 +3312,7 @@
     });
 
     window.addEventListener('resize', function () {
-      if (isCycle()) { renderTimelineHeader(false); renderBars(); }
+      if (isCycle()) { applySavedSplit(); renderTimelineHeader(false); renderBars(); }
       renderLinks();
       updateMonthChip();
     });
@@ -3290,6 +3380,7 @@
     calcToSel = document.getElementById('calcTo');
     calcResultEl = document.getElementById('calcResult');
     calcDetailEl = document.getElementById('calcDetail');
+    calcSplitEl = document.getElementById('calcSplit');
 
     var stored = readStoredProject();
     state.project = stored || demoProject();
