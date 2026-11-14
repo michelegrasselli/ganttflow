@@ -118,6 +118,26 @@ reimportabile.
 - Interfaccia dell'app interamente in **italiano**; il PDF esportato è interamente in
   **inglese** (scelta esplicita per la condivisione del documento).
 
+### 2.6 Stima tempo ciclo (tipo di lavoro alternativo)
+- **Nuovo** apre una scelta tra **Diagramma di Gantt** e **Stima tempo ciclo**; il lavoro
+  corrente viene sostituito (avviso se contiene attività).
+- Stessa grafica del Gantt, ma scala in **secondi** con risoluzione al **decimo**:
+  colonne Attività, Durata (s), Inizio (s), Fine (s), Vincolo + offset (s), Colore.
+- Tempo continuo: `fine = inizio + durata`. Vincoli: `FS` `inizio = fine_pred + offset`,
+  `SS` `inizio = inizio_pred + offset`, `FF` `fine = fine_pred − offset`; inizio mai < 0.
+- **Tempo ciclo della pagina** = massima fine tra le attività (misurato dal secondo 0);
+  linea rossa tratteggiata + etichetta `TC` nel grafico e nel PDF.
+- **Pagine** stile foglio di calcolo (linguette in basso): aggiungi, rinomina (doppio
+  clic/F2), sposta, duplica, elimina con annullamento; massimo 50.
+- **Import di una pagina** nella pagina attiva come **attività collegata**
+  (`sourceSheetId`): nome = nome pagina, durata = tempo ciclo della pagina, entrambi
+  aggiornati in automatico e bloccati. Import ciclici (diretti o indiretti) impediti;
+  eliminando la pagina sorgente l'attività diventa normale con l'ultima durata.
+- Pannello calendario, weekend/festivi e pulsante Oggi non si applicano (il pulsante
+  diventa **Inizio**, torna al secondo 0).
+- PDF in inglese con **tutte le pagine** in sequenza (`[sheet]` indica una pagina
+  importata), file `<nome>-cycle-time-<data>.pdf`.
+
 ## 3. Modello dati
 
 Progetto (in memoria e nel file esportato):
@@ -184,6 +204,15 @@ Regole:
   (`ganttflow.layout.v1` in `localStorage`).
 - In import ogni campo viene validato e normalizzato; id non validi vengono
   rigenerati, riferimenti mancanti azzerati, durata e lag limitati.
+- `type` (v4): `"gantt"` (default se assente) oppure `"cycle"`. Il file esportato ha
+  `version: 4`; le versioni 2 e 3 restano importabili come Gantt.
+
+Stima tempo ciclo (`type: "cycle"`): al posto di `tasks`/`hiddenRanges`/`customHolidays`
+contiene `activeSheet` e `sheets: [{ id, name, tasks }]`. Ogni attività ha `start`,
+`end`, `duration`, `lag` in secondi (un decimale, durata ≥ 0,1 s, offset 0–3600 s),
+`color`, `predecessorId` (solo nella stessa pagina), `link` e `sourceSheetId`
+(`null` o id della pagina importata). Le larghezze colonne del tempo ciclo sono salvate
+a parte in `ganttflow.layout.cycle.v1`.
 
 ## 4. Architettura
 
@@ -235,9 +264,16 @@ assets/favicon.svg  logo e favicon
 | Colonne con limiti min/max | Evita colonne inutilizzabili o layout rotti ed è coerente con il ridimensionamento da tastiera/doppio clic. |
 | PDF scritto a mano | Nessuna libreria disponibile offline; output vettoriale e testo selezionabile. |
 | Formato progetto versionato | Consente evoluzioni future mantenendo la compatibilità. |
+| Tempo ciclo nello stesso app.js con `type` di progetto | Riusa griglia, vincoli, colori, colonne, toast e PDF: stessa grafica, una sola app da mantenere. |
+| Secondi continui (fine esclusiva) e decimi | Nel tempo ciclo le attività si susseguono senza "giorno inclusivo"; i decimi coprono le stime tipiche di stazioni e macchine. |
+| Pagina importata come attività collegata | Il tempo ciclo della pagina sorgente resta sempre coerente; il ricalcolo visita le pagine in ordine di dipendenza e rompe eventuali cicli. |
+| Tempo ciclo misurato dal secondo 0 | Un ritardo iniziale fa parte del ciclo; coerente con il righello che parte da 0. |
 | Autosalvataggio locale | L'utente non deve perdere il lavoro chiudendo il browser. |
 
-## 6. Stato attuale (v1.4)
+## 6. Stato attuale (v1.5)
+
+Novità v1.5: scelta del tipo di lavoro con **Nuovo**; **stima tempo ciclo** in secondi
+con pagine, import di pagine come attività collegate, export JSON v4 e PDF multipagina.
 
 Implementato e verificato:
 - calcolo bidirezionale durata/inizio/fine sui **giorni considerati**;

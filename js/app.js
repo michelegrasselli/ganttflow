@@ -30,6 +30,28 @@
   var MAX_CUSTOM = 200;
   var COL_MIN = [80, 34, 76, 76, 118, 36, 54, 48];
   var COL_MAX = [640, 160, 260, 260, 420, 120, 180, 120];
+  /* Configurazione colonne per tipo di lavoro (Gantt / tempo ciclo). */
+  var COLS = {
+    gantt: { min: COL_MIN, max: COL_MAX, def: [121, 46, 104, 104, 168, 44, 64, 60], key: 'ganttflow.layout.v1' },
+    cycle: {
+      min: [80, 40, 48, 48, 118, 36, 48],
+      max: [640, 160, 200, 200, 420, 120, 120],
+      def: [164, 64, 70, 70, 168, 44, 60],
+      key: 'ganttflow.layout.cycle.v1'
+    }
+  };
+  /* Zoom del tempo ciclo: pixel per secondo. */
+  var CYCLE_ZOOMS = [
+    { px: 100, label: 'Dettaglio' },
+    { px: 40, label: 'Standard' },
+    { px: 14, label: 'Compatto' },
+    { px: 4, label: 'Panoramica' }
+  ];
+  var CYCLE_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200];
+  var CYCLE_HEAD_H = 54;
+  var MAX_SHEETS = 50;
+  var MAX_SECONDS = 86400;
+  var MAX_LAG_SECONDS = 3600;
   var DAY_MS = 86400000;
   var WD = ['dom', 'lun', 'mar', 'mer', 'gio', 'ven', 'sab'];
   var MONTHS = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
@@ -61,6 +83,7 @@
   var colorCursor = 0;
   var customHolidayIndex = {};
   var colDrag = null;
+  var cycleScale = null;
 
   /* --------------------------- riferimenti DOM --------------------------- */
   var board, grid, emptyEl, statsbar, headerRow, headTimeline, linksSvg;
@@ -68,6 +91,7 @@
   var modalEl, modalTitleEl, modalTextEl, modalOkEl, modalCancelEl, modalIconEl;
   var tlChip, tlChipText, chipRaf = 0;
   var hideStartEl, hideEndEl, hiddenChipsEl, customDateEl, customNameEl, customChipsEl;
+  var sheetBarEl, sheetTabsEl, importSheetSel, typeModalEl, typeModalResolve = null;
 
   /* ============================================================
      UTILITÀ
@@ -246,6 +270,20 @@
     if (!Number.isFinite(n)) return def;
     return Math.min(max, Math.max(min, n));
   }
+  /* ---------------- secondi (tempo ciclo) ---------------- */
+  function round1(v) { return Math.round(v * 10) / 10; }
+  function clampSec(v, min, max, def) {
+    var n = typeof v === 'number' ? v : parseFloat(String(v).replace(',', '.'));
+    if (!Number.isFinite(n)) return def;
+    return round1(Math.min(max, Math.max(min, n)));
+  }
+  function secText(v) {
+    var r = round1(v || 0);
+    return String(r);
+  }
+  function fmtSec(v) {
+    return secText(v).replace('.', ',') + ' s';
+  }
   function hexColor(v) {
     return typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v) ? v.toLowerCase() : null;
   }
@@ -332,6 +370,7 @@
   function makeProject(name, tasks) {
     var now = new Date().toISOString();
     return {
+      type: 'gantt',
       name: name || 'Nuovo progetto',
       createdAt: now,
       updatedAt: now,
@@ -371,7 +410,38 @@
     return t;
   }
 
-  function tasks() { return state.project ? state.project.tasks : []; }
+  function isCycle() { return !!state.project && state.project.type === 'cycle'; }
+  function sheets() { return isCycle() && Array.isArray(state.project.sheets) ? state.project.sheets : []; }
+  function sheetById(id) {
+    var list = sheets();
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+    return null;
+  }
+  function activeSheet() {
+    if (!isCycle()) return null;
+    var s = sheetById(state.project.activeSheet);
+    if (!s && sheets().length) {
+      s = sheets()[0];
+      state.project.activeSheet = s.id;
+    }
+    return s;
+  }
+  function tasks() {
+    if (!state.project) return [];
+    if (isCycle()) {
+      var s = activeSheet();
+      return s ? s.tasks : [];
+    }
+    return state.project.tasks;
+  }
+  function setTasks(list) {
+    if (isCycle()) {
+      var s = activeSheet();
+      if (s) s.tasks = list;
+    } else {
+      state.project.tasks = list;
+    }
+  }
 
   function taskById(id) {
     var list = tasks();
@@ -397,6 +467,7 @@
 
   /* Ricostruisce durate, date e catene di dipendenza in ordine topologico. */
   function recalc() {
+    if (isCycle()) { recalcCycle(); return; }
     var list = tasks();
     if (!list.length) return;
     rebuildHolidayIndex();
@@ -459,6 +530,7 @@
     var now = new Date().toISOString();
     var customs = normalizeCustomHolidays(raw.customHolidays);
     var project = {
+      type: 'gantt',
       name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim().slice(0, 80) : 'Progetto importato',
       createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : now,
       updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : now,
@@ -553,6 +625,280 @@
     return tasks().filter(function (t) { return t.predecessorId && taskById(t.predecessorId); }).length;
   }
 
+  /* ============================================================
+     MODELLO — STIMA TEMPO CICLO
+     Attività in secondi (decimi), organizzate in pagine. Una pagina
+     può essere importata in un'altra come attività collegata: nome
+     della pagina e durata pari al suo tempo ciclo, sempre aggiornati.
+     ============================================================ */
+  function makeSheet(name, list) {
+    return { id: uid(), name: name || 'Pagina 1', tasks: list || [] };
+  }
+
+  function makeCycleProject(name, sheetList) {
+    var now = new Date().toISOString();
+    var list = sheetList && sheetList.length ? sheetList : [makeSheet('Pagina 1', [])];
+    return {
+      type: 'cycle',
+      name: name || 'Nuova stima tempo ciclo',
+      createdAt: now,
+      updatedAt: now,
+      activeSheet: list[0].id,
+      sheets: list
+    };
+  }
+
+  function makeCycleTask(partial) {
+    var t = {
+      id: uid(),
+      name: 'Nuova attività',
+      start: 0,
+      end: 0,
+      duration: 1,
+      color: nextColor(),
+      predecessorId: null,
+      link: 'FS',
+      lag: 0,
+      sourceSheetId: null
+    };
+    if (partial) Object.keys(partial).forEach(function (k) { if (partial[k] !== undefined) t[k] = partial[k]; });
+    t.start = clampSec(t.start, 0, MAX_SECONDS, 0);
+    t.duration = clampSec(t.duration, t.sourceSheetId ? 0 : 0.1, MAX_SECONDS, 1);
+    t.lag = clampSec(t.lag, 0, MAX_LAG_SECONDS, 0);
+    t.end = round1(t.start + t.duration);
+    return t;
+  }
+
+  /* Tempo ciclo di una pagina: dal secondo 0 alla fine dell'ultima attività. */
+  function sheetCycleTime(sheet) {
+    var max = 0;
+    (sheet && Array.isArray(sheet.tasks) ? sheet.tasks : []).forEach(function (t) {
+      if (t.end > max) max = t.end;
+    });
+    return round1(max);
+  }
+
+  /* true se la pagina `fromId` contiene (anche indirettamente) la pagina `targetId`. */
+  function sheetDependsOn(fromId, targetId, seen) {
+    if (fromId === targetId) return true;
+    seen = seen || {};
+    if (seen[fromId]) return false;
+    seen[fromId] = true;
+    var s = sheetById(fromId);
+    if (!s) return false;
+    return s.tasks.some(function (t) {
+      return t.sourceSheetId && sheetDependsOn(t.sourceSheetId, targetId, seen);
+    });
+  }
+
+  function canImportSheet(sourceId, intoId) {
+    return sourceId !== intoId && !!sheetById(sourceId) && !sheetDependsOn(sourceId, intoId);
+  }
+
+  function recalcSheetTasks(list) {
+    var map = {};
+    list.forEach(function (t) { map[t.id] = t; });
+    list.forEach(function (t) {
+      t.lag = clampSec(t.lag, 0, MAX_LAG_SECONDS, 0);
+      t.link = LINK_TYPES[t.link] ? t.link : 'FS';
+      t.color = hexColor(t.color) || '#6366f1';
+      t.name = typeof t.name === 'string' ? t.name : 'Attività';
+      if (t.predecessorId && !map[t.predecessorId]) t.predecessorId = null;
+      if (t.predecessorId === t.id) t.predecessorId = null;
+    });
+
+    var visited = {};
+    var order = [];
+    function visit(t, stack) {
+      if (visited[t.id]) return;
+      if (stack[t.id]) { t.predecessorId = null; return; }
+      stack[t.id] = true;
+      if (t.predecessorId && map[t.predecessorId]) visit(map[t.predecessorId], stack);
+      delete stack[t.id];
+      visited[t.id] = true;
+      order.push(t);
+    }
+    list.forEach(function (t) { visit(t, {}); });
+
+    order.forEach(function (t) {
+      t.duration = clampSec(t.duration, t.sourceSheetId ? 0 : 0.1, MAX_SECONDS, 1);
+      var start;
+      if (t.predecessorId && map[t.predecessorId]) {
+        var p = map[t.predecessorId];
+        if (t.link === 'SS') start = p.start + t.lag;
+        else if (t.link === 'FF') start = p.end - t.lag - t.duration;
+        else start = p.end + t.lag;
+      } else {
+        start = clampSec(t.start, 0, MAX_SECONDS, 0);
+      }
+      t.start = round1(Math.max(0, Math.min(MAX_SECONDS, start)));
+      t.end = round1(t.start + t.duration);
+    });
+  }
+
+  /* Ricalcola tutte le pagine: prima quelle importate, poi quelle che le contengono. */
+  function recalcCycle() {
+    if (!Array.isArray(state.project.sheets) || !state.project.sheets.length) {
+      state.project.sheets = [makeSheet('Pagina 1', [])];
+    }
+    var list = state.project.sheets;
+    if (!sheetById(state.project.activeSheet)) state.project.activeSheet = list[0].id;
+    var byId = {};
+    list.forEach(function (s) { byId[s.id] = s; });
+    var done = {}, visiting = {};
+    function visitSheet(s) {
+      if (done[s.id]) return;
+      visiting[s.id] = true;
+      s.tasks.forEach(function (t) {
+        if (!t.sourceSheetId) return;
+        var src = byId[t.sourceSheetId];
+        if (!src || src === s || visiting[src.id]) {
+          t.sourceSheetId = null;
+          if (!(t.duration >= 0.1)) t.duration = 0.1;
+          return;
+        }
+        visitSheet(src);
+      });
+      s.tasks.forEach(function (t) {
+        var src = t.sourceSheetId ? byId[t.sourceSheetId] : null;
+        if (!src) return;
+        t.duration = sheetCycleTime(src);
+        t.name = src.name;
+      });
+      recalcSheetTasks(s.tasks);
+      delete visiting[s.id];
+      done[s.id] = true;
+    }
+    list.forEach(function (s) { visitSheet(s); });
+  }
+
+  function validId(v) {
+    return typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v);
+  }
+
+  function sanitizeCycleProject(raw) {
+    if (!raw || typeof raw !== 'object' || !Array.isArray(raw.sheets) || !raw.sheets.length) {
+      throw new Error('Formato non valido: mancano le pagine del tempo ciclo.');
+    }
+    var now = new Date().toISOString();
+    var sheetIds = {}, taskIds = {};
+    var out = [];
+    raw.sheets.slice(0, MAX_SHEETS).forEach(function (src, si) {
+      if (!src || typeof src !== 'object') return;
+      var id = validId(src.id) ? src.id : uid();
+      while (sheetIds[id]) id = uid();
+      sheetIds[id] = true;
+      var sheet = {
+        id: id,
+        name: typeof src.name === 'string' && src.name.trim() ? src.name.trim().slice(0, 60) : 'Pagina ' + (si + 1),
+        tasks: []
+      };
+      (Array.isArray(src.tasks) ? src.tasks : []).slice(0, MAX_TASKS).forEach(function (t, i) {
+        if (!t || typeof t !== 'object') return;
+        var tid = validId(t.id) ? t.id : uid();
+        while (taskIds[tid]) tid = uid();
+        taskIds[tid] = true;
+        var start = clampSec(t.start, 0, MAX_SECONDS, 0);
+        var dur = clampSec(t.duration, 0, MAX_SECONDS, NaN);
+        if (!Number.isFinite(dur)) {
+          var end = clampSec(t.end, 0, MAX_SECONDS, NaN);
+          dur = Number.isFinite(end) && end > start ? round1(end - start) : 1;
+        }
+        sheet.tasks.push({
+          id: tid,
+          name: typeof t.name === 'string' && t.name.trim() ? t.name.trim().slice(0, 120) : 'Attività ' + (i + 1),
+          start: start,
+          end: round1(start + dur),
+          duration: dur,
+          color: hexColor(t.color) || PALETTE[i % PALETTE.length],
+          predecessorId: typeof t.predecessorId === 'string' ? t.predecessorId : null,
+          link: LINK_TYPES[t.link] ? t.link : 'FS',
+          lag: clampSec(t.lag, 0, MAX_LAG_SECONDS, 0),
+          sourceSheetId: typeof t.sourceSheetId === 'string' ? t.sourceSheetId : null
+        });
+      });
+      var byId = {};
+      sheet.tasks.forEach(function (t) { byId[t.id] = t; });
+      sheet.tasks.forEach(function (t) {
+        if (t.predecessorId && !byId[t.predecessorId]) t.predecessorId = null;
+        if (t.predecessorId === t.id) t.predecessorId = null;
+      });
+      out.push(sheet);
+    });
+    if (!out.length) throw new Error('Il file non contiene pagine valide.');
+    out.forEach(function (s) {
+      s.tasks.forEach(function (t) {
+        if (t.sourceSheetId && (!sheetIds[t.sourceSheetId] || t.sourceSheetId === s.id)) t.sourceSheetId = null;
+        if (!t.sourceSheetId && t.duration < 0.1) {
+          t.duration = 0.1;
+          t.end = round1(t.start + t.duration);
+        }
+      });
+    });
+    return {
+      type: 'cycle',
+      name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim().slice(0, 80) : 'Tempo ciclo importato',
+      createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : now,
+      updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : now,
+      activeSheet: typeof raw.activeSheet === 'string' && sheetIds[raw.activeSheet] ? raw.activeSheet : out[0].id,
+      sheets: out
+    };
+  }
+
+  function sanitizeAny(raw) {
+    if (raw && typeof raw === 'object' && (raw.type === 'cycle' || (Array.isArray(raw.sheets) && !Array.isArray(raw.tasks)))) {
+      return sanitizeCycleProject(raw);
+    }
+    return sanitizeProject(raw);
+  }
+
+  function projectTaskCount(p) {
+    if (!p) return 0;
+    if (p.type === 'cycle') {
+      return (p.sheets || []).reduce(function (n, s) { return n + (s.tasks ? s.tasks.length : 0); }, 0);
+    }
+    return Array.isArray(p.tasks) ? p.tasks.length : 0;
+  }
+
+  function demoCycleProject() {
+    function seq(seed) {
+      var list = [];
+      seed.forEach(function (s) {
+        list.push(makeCycleTask({
+          name: s[0],
+          duration: s[1],
+          color: s[2],
+          predecessorId: s[3] === null ? null : list[s[3]].id,
+          link: s[4] || 'FS',
+          lag: s[5] || 0
+        }));
+      });
+      return list;
+    }
+    var s1 = makeSheet('Stazione 1 – Carico', seq([
+      ['Prelievo pezzo', 3.5, '#6366f1', null],
+      ['Posizionamento in attrezzatura', 2.5, '#0ea5e9', 0, 'FS'],
+      ['Bloccaggio', 1.5, '#14b8a6', 1, 'FS'],
+      ['Controllo presenza pezzo', 1, '#a855f7', 2, 'SS', 0.5],
+      ['Consenso partenza', 0.5, '#22c55e', 2, 'FS', 0]
+    ]));
+    var s2 = makeSheet('Stazione 2 – Lavorazione', seq([
+      ['Avvicinamento utensile', 2, '#f59e0b', null],
+      ['Fresatura', 18, '#f97316', 0, 'FS'],
+      ['Soffiatura trucioli', 3, '#64748b', 1, 'FF', 0],
+      ['Ritorno utensile', 2, '#eab308', 1, 'FS'],
+      ['Misura in macchina', 4.5, '#ef4444', 3, 'FS', 0.5]
+    ]));
+    var t1 = makeCycleTask({ name: s1.name, sourceSheetId: s1.id, duration: 0, color: '#6366f1' });
+    var t2 = makeCycleTask({ name: s2.name, sourceSheetId: s2.id, duration: 0, color: '#f97316', predecessorId: t1.id });
+    var t3 = makeCycleTask({ name: 'Scarico pezzo', duration: 4, color: '#ec4899', predecessorId: t2.id });
+    var t4 = makeCycleTask({ name: 'Rotazione tavola', duration: 2.5, color: '#14b8a6', predecessorId: t3.id, link: 'FS' });
+    var s3 = makeSheet('Ciclo completo', [t1, t2, t3, t4]);
+    var p = makeCycleProject('Stima tempo ciclo – Cella di lavorazione', [s1, s2, s3]);
+    p.activeSheet = s3.id;
+    return p;
+  }
+
 
   /* ============================================================
      RENDER
@@ -562,15 +908,26 @@
 
     var head = el('div', 'row row-head');
     var headFields = el('div', 'fields head-fields');
-    var labels = ['Attività', 'Giorni', 'Inizio', 'Fine', 'Vincolo', 'Colore', 'Includi', ''];
-    var classes = ['cell-name', 'cell-dur', 'cell-start', 'cell-end', 'cell-pred', 'cell-color', 'cell-flags', 'cell-act'];
+    var cyc = isCycle();
+    var labels = cyc
+      ? ['Attività', 'Durata', 'Inizio', 'Fine', 'Vincolo', 'Colore', '']
+      : ['Attività', 'Giorni', 'Inizio', 'Fine', 'Vincolo', 'Colore', 'Includi', ''];
+    var classes = cyc
+      ? ['cell-name', 'cell-dur', 'cell-start', 'cell-end', 'cell-pred', 'cell-color', 'cell-act']
+      : ['cell-name', 'cell-dur', 'cell-start', 'cell-end', 'cell-pred', 'cell-color', 'cell-flags', 'cell-act'];
     labels.forEach(function (label, i) {
       var c = el('div', 'cell ' + classes[i]);
       if (i === 4) {
         c.appendChild(el('span', '', label));
-        c.appendChild(el('span', 'head-sub', 'offset (gg)'));
-        c.title = 'Collega l’attività a una precedente e scegli il tipo di vincolo. Il numero è l’offset in giorni rispetto al riferimento del vincolo.';
-      } else if (i === 6) {
+        c.appendChild(el('span', 'head-sub', cyc ? 'offset (s)' : 'offset (gg)'));
+        c.title = cyc
+          ? 'Collega l’attività a una precedente e scegli il tipo di vincolo. Il numero è l’offset in secondi rispetto al riferimento del vincolo.'
+          : 'Collega l’attività a una precedente e scegli il tipo di vincolo. Il numero è l’offset in giorni rispetto al riferimento del vincolo.';
+      } else if (cyc && i >= 1 && i <= 3) {
+        c.appendChild(el('span', '', label));
+        c.appendChild(el('span', 'head-sub', 's'));
+        c.title = i === 1 ? 'Durata in secondi (decimi ammessi)' : (i === 2 ? 'Secondo di inizio' : 'Secondo di fine');
+      } else if (!cyc && i === 6) {
         c.textContent = label;
         c.title = 'Giorni da considerare nella durata: sabati, domeniche e festivi. Se una spunta è assente, quei giorni vengono saltati.';
       } else {
@@ -592,7 +949,7 @@
     headerRow = head;
     grid.appendChild(head);
 
-    tasks().forEach(function (t) { grid.appendChild(buildTaskRow(t)); });
+    tasks().forEach(function (t) { grid.appendChild(cyc ? buildCycleRow(t) : buildTaskRow(t)); });
 
     var addRow = el('div', 'row add-row');
     var addFields = el('div', 'fields');
@@ -609,18 +966,20 @@
     grid.appendChild(linksSvg);
   }
 
+  function colCfg() { return isCycle() ? COLS.cycle : COLS.gantt; }
   function readSavedColumns() {
+    var cfg = colCfg();
     try {
-      var raw = localStorage.getItem(LAYOUT_KEY);
+      var raw = localStorage.getItem(cfg.key);
       if (!raw) return null;
       var data = JSON.parse(raw);
       var widths = data && Array.isArray(data.widths) ? data.widths : null;
-      if (!widths || widths.length !== 8) return null;
+      if (!widths || widths.length !== cfg.def.length) return null;
       var ok = true;
       var clean = widths.map(function (w, i) {
         var n = Number(w);
-        if (!Number.isFinite(n)) { ok = false; return COL_MIN[i]; }
-        return Math.max(COL_MIN[i], Math.min(COL_MAX[i], n));
+        if (!Number.isFinite(n)) { ok = false; return cfg.min[i]; }
+        return Math.max(cfg.min[i], Math.min(cfg.max[i], n));
       });
       return ok ? clean : null;
     } catch (e) {
@@ -628,17 +987,19 @@
     }
   }
   function currentColumnWidths() {
+    var cfg = colCfg();
     var fields = grid.querySelector('.row-head .fields');
     if (fields) {
       var parts = getComputedStyle(fields).gridTemplateColumns.split(/\s+/).map(parseFloat)
         .filter(function (n) { return Number.isFinite(n); });
-      if (parts.length === 8) return parts;
+      if (parts.length === cfg.def.length) return parts;
     }
-    return [121, 46, 104, 104, 168, 44, 64, 60];
+    return cfg.def.slice();
   }
   function applyColumnWidths(widths) {
+    var cfg = colCfg();
     var clean = widths.map(function (w, i) {
-      return Math.max(COL_MIN[i], Math.min(COL_MAX[i], Math.round(w * 10) / 10));
+      return Math.max(cfg.min[i], Math.min(cfg.max[i], Math.round(w * 10) / 10));
     });
     var sum = clean.reduce(function (a, b) { return a + b; }, 0);
     state.columnWidths = clean;
@@ -647,11 +1008,11 @@
   }
   function persistColumnWidths() {
     if (!state.columnWidths) return;
-    try { localStorage.setItem(LAYOUT_KEY, JSON.stringify({ widths: state.columnWidths })); } catch (e) { /* ignore */ }
+    try { localStorage.setItem(colCfg().key, JSON.stringify({ widths: state.columnWidths })); } catch (e) { /* ignore */ }
   }
   function resetColumnWidths() {
     state.columnWidths = null;
-    try { localStorage.removeItem(LAYOUT_KEY); } catch (e) { /* ignore */ }
+    try { localStorage.removeItem(colCfg().key); } catch (e) { /* ignore */ }
     grid.style.removeProperty('--colw');
     document.documentElement.style.removeProperty('--left-w');
     renderLinks();
@@ -659,8 +1020,47 @@
     toast('Larghezza colonne ripristinata.');
   }
   function initColumnLayout() {
+    state.columnWidths = null;
+    grid.style.removeProperty('--colw');
+    document.documentElement.style.removeProperty('--left-w');
     var saved = readSavedColumns();
     if (saved) applyColumnWidths(saved);
+  }
+
+  /* Adatta l'interfaccia al tipo di lavoro (Gantt o tempo ciclo). */
+  function applyMode() {
+    var cyc = isCycle();
+    document.documentElement.classList.toggle('mode-cycle', cyc);
+    var appName = document.querySelector('.app-name');
+    if (appName) appName.textContent = cyc ? 'GanttFlow · Tempo ciclo' : 'GanttFlow';
+    var calPanel = document.getElementById('calPanel');
+    if (calPanel) calPanel.hidden = cyc;
+    if (sheetBarEl) sheetBarEl.hidden = !cyc;
+    var btnToday = document.getElementById('btnToday');
+    if (btnToday) {
+      btnToday.textContent = cyc ? 'Inizio' : 'Oggi';
+      btnToday.title = cyc ? 'Torna al secondo 0' : 'Vai a oggi';
+    }
+    var legend = document.querySelector('.statusbar .legend');
+    if (legend) legend.hidden = cyc;
+    var hint = document.querySelector('.statusbar .status-hint');
+    if (hint) {
+      hint.textContent = cyc
+        ? 'Doppio clic su una pagina per rinominarla · «Importa pagina» la inserisce come attività collegata con il suo tempo ciclo.'
+        : 'Trascina i bordi delle intestazioni per ridimensionare le colonne · Spunte Sab/Dom/Fest: giorni inclusi nella durata.';
+    }
+    var emptyTitle = emptyEl ? emptyEl.querySelector('h2') : null;
+    var emptyText = emptyEl ? emptyEl.querySelector('p') : null;
+    if (emptyTitle) emptyTitle.textContent = cyc ? 'Pagina vuota' : 'Inizia a pianificare';
+    if (emptyText) {
+      emptyText.textContent = cyc
+        ? 'Aggiungi la prima attività con durata in secondi, oppure importa un’altra pagina come attività con il suo tempo ciclo dalla barra delle pagine.'
+        : 'Aggiungi la prima attività con durata e date, oppure importa un progetto salvato. Puoi partire anche da un esempio già collegato.';
+    }
+    var board0 = document.getElementById('board');
+    if (board0) board0.setAttribute('aria-label', cyc ? 'Grafico di stima tempo ciclo' : 'Diagramma di Gantt');
+    headerSig = '';
+    initColumnLayout();
   }
   function onColMouseDown(e) {
     var rz = e.target.closest ? e.target.closest('.col-resizer') : null;
@@ -752,6 +1152,122 @@
     return row;
   }
 
+  var LOCK_SVG = '<span class="lock" aria-hidden="true"><svg viewBox="0 0 16 16"><rect x="3.2" y="7" width="9.6" height="6.6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0V7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></span>';
+  var SHEET_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2.5 6.5h11M6.5 6.5v7" stroke="currentColor" stroke-width="1.3"/></svg>';
+
+  function buildCycleRow(t) {
+    var row = el('div', 'row task' + (t.sourceSheetId ? ' sheet-linked' : ''));
+    row.dataset.id = t.id;
+    row.innerHTML =
+      '<div class="fields">' +
+        '<div class="cell cell-name">' +
+          (t.sourceSheetId ? '<span class="sheet-badge" title="Pagina importata: nome e durata seguono la pagina sorgente">' + SHEET_SVG + '</span>' : '') +
+          '<input class="inp inp-name" data-field="name" maxlength="120" aria-label="Nome attività" spellcheck="false" placeholder="Nome attività">' +
+        '</div>' +
+        '<div class="cell cell-dur"><input class="inp inp-num inp-sec" data-field="duration" type="number" min="0.1" max="' + MAX_SECONDS + '" step="0.1" aria-label="Durata in secondi" title="Durata stimata in secondi"></div>' +
+        '<div class="cell cell-start"><input class="inp inp-num inp-sec" data-field="start" type="number" min="0" max="' + MAX_SECONDS + '" step="0.1" aria-label="Secondo di inizio">' + LOCK_SVG + '</div>' +
+        '<div class="cell cell-end"><input class="inp inp-num inp-sec" data-field="end" type="number" min="0.1" max="' + MAX_SECONDS + '" step="0.1" aria-label="Secondo di fine">' + LOCK_SVG + '</div>' +
+        '<div class="cell cell-pred">' +
+          '<div class="link-line">' +
+            '<select class="inp inp-select inp-pred" data-field="pred" aria-label="Attività a cui collegare questa" title="Nessun collegamento"></select>' +
+          '</div>' +
+          '<div class="link-line">' +
+            '<select class="inp inp-select inp-link" data-field="link" aria-label="Tipo di vincolo" title="Tipo di vincolo"></select>' +
+            '<input class="inp inp-lag" data-field="lag" type="number" min="0" max="' + MAX_LAG_SECONDS + '" step="0.1" placeholder="0" title="Offset in secondi" aria-label="Offset in secondi">' +
+          '</div>' +
+        '</div>' +
+        '<div class="cell cell-color">' +
+          '<button type="button" class="swatch-btn" data-action="color" aria-label="Scegli il colore" aria-haspopup="true" title="Scegli un colore">' +
+            '<span class="swatch-dot"></span>' +
+          '</button>' +
+          '<div class="swatch-pop" hidden></div>' +
+        '</div>' +
+        '<div class="cell cell-act">' +
+          '<button type="button" class="icon-btn" data-action="duplicate" title="Duplica attività" aria-label="Duplica attività"><svg viewBox="0 0 16 16"><rect x="5.2" y="5.2" width="8" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.4 3.4H5.2a2 2 0 0 0-2 2v5.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>' +
+          '<button type="button" class="icon-btn danger" data-action="delete" title="Elimina attività" aria-label="Elimina attività"><svg viewBox="0 0 16 16"><path d="M3.4 4.6h9.2M6.2 4.6V3.2h3.6v1.4M4.6 4.6l.6 8.2h5.6l.6-8.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="timeline"><div class="lane"><div class="bar"></div></div></div>';
+    buildPredOptions(row.querySelector('[data-field="pred"]'), t);
+    var linkSel = row.querySelector('[data-field="link"]');
+    LINK_ORDER.forEach(function (k) { linkSel.appendChild(new Option(LINK_TYPES[k].label, k)); });
+    linkSel.value = t.link;
+    var pop = row.querySelector('.swatch-pop');
+    var colors = SWATCHES.slice();
+    if (colors.indexOf(t.color) < 0) colors.unshift(t.color);
+    colors.forEach(function (c) {
+      var b = el('button', 'swatch');
+      b.type = 'button';
+      b.dataset.color = c;
+      b.style.background = c;
+      b.title = c;
+      b.setAttribute('aria-label', 'Colore ' + c);
+      pop.appendChild(b);
+    });
+    return row;
+  }
+
+  function syncCycleRows() {
+    grid.querySelectorAll('.row.task').forEach(function (row) {
+      var t = taskById(row.dataset.id);
+      if (!t) return;
+      var src = t.sourceSheetId ? sheetById(t.sourceSheetId) : null;
+      var nameInp = row.querySelector('[data-field="name"]');
+      setInput(nameInp, t.name);
+      nameInp.disabled = !!src;
+      nameInp.title = src ? 'Nome della pagina importata «' + src.name + '»: rinomina la pagina per cambiarlo' : '';
+      setInput(row.querySelector('[data-field="duration"]'), secText(t.duration));
+      setInput(row.querySelector('[data-field="start"]'), secText(t.start));
+      setInput(row.querySelector('[data-field="end"]'), secText(t.end));
+      setInput(row.querySelector('[data-field="lag"]'), secText(t.lag));
+
+      var predSel = row.querySelector('[data-field="pred"]');
+      if (document.activeElement !== predSel && predSel.value !== (t.predecessorId || '')) predSel.value = t.predecessorId || '';
+      var predTask = t.predecessorId ? taskById(t.predecessorId) : null;
+      predSel.title = predTask ? 'Collegata a «' + predTask.name + '»' : 'Nessun collegamento';
+
+      var linkSel = row.querySelector('[data-field="link"]');
+      if (document.activeElement !== linkSel && linkSel.value !== t.link) linkSel.value = t.link;
+      linkSel.disabled = !t.predecessorId;
+      linkSel.title = predTask ? 'Tipo di vincolo con «' + predTask.name + '»' : 'Scegli prima un’attività collegata';
+
+      var lag = row.querySelector('[data-field="lag"]');
+      lag.disabled = !t.predecessorId;
+      if (!t.predecessorId) lag.title = 'Offset in secondi: disponibile con un collegamento';
+      else if (t.link === 'SS') lag.title = 'Secondi tra l’inizio dell’attività collegata e l’inizio di questa';
+      else if (t.link === 'FF') lag.title = 'Secondi prima della fine dell’attività collegata in cui questa si conclude';
+      else lag.title = 'Secondi di attesa dopo la fine dell’attività collegata';
+
+      var dot = row.querySelector('.swatch-dot');
+      if (dot) dot.style.background = t.color;
+      row.querySelectorAll('.swatch').forEach(function (b) {
+        b.classList.toggle('on', b.dataset.color === t.color);
+      });
+
+      var durInput = row.querySelector('[data-field="duration"]');
+      var startInput = row.querySelector('[data-field="start"]');
+      var endInput = row.querySelector('[data-field="end"]');
+      var lockedStart = !!t.predecessorId;
+      var lockedEnd = !!src || (!!t.predecessorId && t.link === 'FF');
+      var lockTitle = t.link === 'SS'
+        ? 'Secondo calcolato: mantiene la stessa distanza dall’inizio dell’attività collegata'
+        : (t.link === 'FF'
+          ? 'Secondo calcolato: finisce prima della fine dell’attività collegata'
+          : 'Secondo calcolato: inizia dopo la fine dell’attività collegata');
+      durInput.disabled = !!src;
+      durInput.classList.toggle('locked', !!src);
+      durInput.title = src ? 'Tempo ciclo della pagina «' + src.name + '» (aggiornato automaticamente)' : 'Durata stimata in secondi';
+      [['start', startInput, lockedStart], ['end', endInput, lockedEnd]].forEach(function (pair) {
+        var inp = pair[1];
+        inp.disabled = pair[2];
+        inp.classList.toggle('locked', pair[2]);
+        inp.title = pair[2] ? (pair[0] === 'end' && src && !(t.predecessorId && t.link === 'FF')
+          ? 'Fine calcolata da inizio + tempo ciclo della pagina importata' : lockTitle) : '';
+        inp.closest(pair[0] === 'start' ? '.cell-start' : '.cell-end').classList.toggle('locked', pair[2]);
+      });
+    });
+  }
+
   function buildPredOptions(select, t) {
     select.textContent = '';
     select.appendChild(new Option('—', ''));
@@ -776,6 +1292,7 @@
   }
 
   function syncRows() {
+    if (isCycle()) { syncCycleRows(); return; }
     var rows = grid.querySelectorAll('.row.task');
     rows.forEach(function (row) {
       var t = taskById(row.dataset.id);
@@ -955,6 +1472,7 @@
   }
 
   function renderTimelineHeader(force) {
+    if (isCycle()) { renderCycleHeader(force); return; }
     range = computeRange();
     buildTimeMap();
     var zoom = ZOOMS[state.zoom];
@@ -1040,6 +1558,7 @@
   }
 
   function renderBars() {
+    if (isCycle()) { renderCycleBars(); return; }
     if (!range) return;
     if (!timeMap) buildTimeMap();
     var px = timeMap.px;
@@ -1069,7 +1588,176 @@
     });
   }
 
+  /* Connettori tra attività collegate; spanOf(t) restituisce [x inizio, x fine]. */
+  function linkPaths(spanOf) {
+    var out = '';
+    var idx = {};
+    tasks().forEach(function (t, i) { idx[t.id] = i; });
+    tasks().forEach(function (t) {
+      if (!t.predecessorId) return;
+      var p = taskById(t.predecessorId);
+      if (!p || idx[p.id] === undefined || idx[t.id] === undefined) return;
+      var ps = spanOf(p), ts = spanOf(t);
+      var x1 = t.link === 'SS' ? ps[0] : ps[1];
+      var x2 = t.link === 'FF' ? ts[1] : ts[0];
+      var y1 = idx[p.id] * ROW_H + ROW_H / 2;
+      var y2 = idx[t.id] * ROW_H + ROW_H / 2;
+      var dash = t.link === 'SS' ? ' stroke-dasharray="4 3"' : (t.link === 'FF' ? ' stroke-dasharray="2 3"' : '');
+      var d;
+      if (x2 - x1 >= 8) {
+        var mid = x1 + Math.max(6, Math.min(14, (x2 - x1) / 2));
+        d = 'M' + x1 + ' ' + y1 + ' H' + mid + ' V' + y2 + ' H' + x2;
+      } else {
+        var back = Math.max(2, Math.min(x1, x2) - 12);
+        d = 'M' + x1 + ' ' + y1 + ' H' + back + ' V' + y2 + ' H' + x2;
+      }
+      out += '<path d="' + d + '" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"' + dash + '></path>';
+      out += '<path d="M' + x2 + ' ' + y2 + ' l-7 -3.4 v6.8 z" fill="#94a3b8"></path>';
+    });
+    return out;
+  }
+
+  /* ---------------- tempo ciclo: scala, intestazione, barre ---------------- */
+  function pickStep(minPx, px, multipleOf) {
+    for (var i = 0; i < CYCLE_STEPS.length; i++) {
+      var s = CYCLE_STEPS[i];
+      if (multipleOf) {
+        var r = s / multipleOf;
+        if (r < 2 || Math.abs(r - Math.round(r)) > 1e-6) continue;
+      }
+      if (s * px >= minPx) return s;
+    }
+    return CYCLE_STEPS[CYCLE_STEPS.length - 1];
+  }
+
+  function buildCycleScale() {
+    var px = CYCLE_ZOOMS[state.zoom].px;
+    var minor = pickStep(26, px);
+    var major = pickStep(110, px, minor);
+    var ct = sheetCycleTime(activeSheet());
+    var want = ct + Math.max(major, ct * 0.15);
+    var fill = visibleTimelineWidth() / px;
+    var total = Math.max(want, fill, major * 2);
+    var nMajor = Math.max(1, Math.ceil(total / major - 1e-9));
+    total = round1(nMajor * major);
+    cycleScale = {
+      px: px,
+      minor: minor,
+      major: major,
+      total: total,
+      nMajor: nMajor,
+      width: total * px,
+      cycleTime: ct
+    };
+    return cycleScale;
+  }
+
+  function clockLabel(v) {
+    var m = Math.floor(v / 60);
+    var s = round1(v - m * 60);
+    return m + ':' + (s < 10 ? '0' : '') + secText(s).replace('.', ',');
+  }
+
+  function renderCycleHeader(force) {
+    var sc = buildCycleScale();
+    grid.classList.remove('compact');
+    grid.style.setProperty('--px', (sc.minor * sc.px) + 'px');
+    grid.style.setProperty('--tl-w', sc.width + 'px');
+    grid.style.setProperty('--dayline', 'rgba(148, 163, 184, .22)');
+    grid.style.setProperty('--day-bg', 'linear-gradient(90deg, transparent, transparent)');
+
+    var sig = 'c|' + sc.px + '|' + sc.minor + '|' + sc.major + '|' + sc.total + '|' + sc.cycleTime;
+    if (!force && sig === headerSig) return;
+    headerSig = sig;
+    headTimeline.textContent = '';
+
+    var majors = el('div', 'months');
+    for (var i = 0; i < sc.nMajor; i++) {
+      var v = round1(i * sc.major);
+      var label = v >= 60 ? fmtSec(v) + ' · ' + clockLabel(v) : fmtSec(v);
+      var m = el('div', 'month', label);
+      m.style.width = (sc.major * sc.px) + 'px';
+      m.title = 'Da ' + fmtSec(v) + ' a ' + fmtSec(round1(v + sc.major));
+      majors.appendChild(m);
+    }
+    headTimeline.appendChild(majors);
+
+    var ticks = el('div', 'days sec-ticks');
+    var nMinor = Math.round(sc.total / sc.minor);
+    var ratio = Math.round(sc.major / sc.minor);
+    for (var j = 0; j < nMinor; j++) {
+      var tv = round1(j * sc.minor);
+      var cell = el('div', 'day' + (j % ratio === 0 ? ' major' : ''));
+      cell.style.width = (sc.minor * sc.px) + 'px';
+      cell.appendChild(el('span', 'dnum', secText(tv).replace('.', ',')));
+      ticks.appendChild(cell);
+    }
+    headTimeline.appendChild(ticks);
+
+    if (sc.cycleTime > 0) {
+      var flag = el('div', 'ct-flag', 'TC ' + fmtSec(sc.cycleTime));
+      flag.style.left = (sc.cycleTime * sc.px) + 'px';
+      flag.title = 'Tempo ciclo della pagina: ' + fmtSec(sc.cycleTime);
+      headTimeline.appendChild(flag);
+    }
+  }
+
+  function renderCycleBars() {
+    var sc = cycleScale || buildCycleScale();
+    var px = sc.px;
+    var rows = {};
+    grid.querySelectorAll('.row.task').forEach(function (r) { rows[r.dataset.id] = r; });
+    tasks().forEach(function (t) {
+      var row = rows[t.id];
+      if (!row) return;
+      var bar = row.querySelector('.bar');
+      var x0 = t.start * px;
+      var w = Math.max(4, t.duration * px - 2);
+      bar.style.left = (x0 + 1) + 'px';
+      bar.style.width = w + 'px';
+      bar.style.background = t.color;
+      bar.classList.toggle('light', isLight(t.color));
+      bar.classList.toggle('selected', t.id === state.selectedId);
+      bar.classList.toggle('linked', !!t.predecessorId);
+      bar.classList.toggle('sheet-bar', !!t.sourceSheetId);
+      bar.textContent = '';
+      if (w >= 54) bar.appendChild(el('span', 'bar-name', t.name || 'Senza nome'));
+      if (w >= 118) bar.appendChild(el('span', 'bar-days', fmtSec(t.duration)));
+      var pred = t.predecessorId ? taskById(t.predecessorId) : null;
+      var src = t.sourceSheetId ? sheetById(t.sourceSheetId) : null;
+      bar.title = (t.name || 'Senza nome') + '\n' + fmtSec(t.start) + ' → ' + fmtSec(t.end) +
+        '  (durata ' + fmtSec(t.duration) + ')' +
+        (src ? '\nPagina importata: «' + src.name + '»' : '') +
+        (pred ? '\n' + LINK_TYPES[t.link].label + ': ' + pred.name + (t.lag ? ' (offset ' + fmtSec(t.lag) + ')' : '') : '');
+    });
+  }
+
+  function renderCycleLinks() {
+    var sc = cycleScale || buildCycleScale();
+    var px = sc.px;
+    var headH = headerRow ? headerRow.offsetHeight : CYCLE_HEAD_H;
+    var totalH = tasks().length * ROW_H;
+    linksSvg.setAttribute('width', sc.width);
+    linksSvg.setAttribute('height', totalH);
+    linksSvg.style.width = sc.width + 'px';
+    linksSvg.style.height = totalH + 'px';
+    linksSvg.style.top = headH + 'px';
+    if (!totalH) { linksSvg.textContent = ''; return; }
+    var out = '';
+    for (var i = 1; i < sc.nMajor; i++) {
+      var x = i * sc.major * px;
+      out += '<line x1="' + x + '" y1="0" x2="' + x + '" y2="' + totalH + '" stroke="rgba(100,116,139,.22)" stroke-width="1"></line>';
+    }
+    if (sc.cycleTime > 0) {
+      var cx = sc.cycleTime * px;
+      out += '<line x1="' + cx + '" y1="0" x2="' + cx + '" y2="' + totalH + '" stroke="#ef4444" stroke-width="1.6" stroke-dasharray="4 3" opacity=".62"></line>';
+    }
+    out += linkPaths(function (t) { return [t.start * px + 1, t.end * px]; });
+    linksSvg.innerHTML = out;
+  }
+
   function renderLinks() {
+    if (isCycle()) { if (linksSvg) renderCycleLinks(); return; }
     if (!linksSvg || !range) return;
     if (!timeMap) buildTimeMap();
     var px = timeMap.px;
@@ -1100,36 +1788,51 @@
       out += '<line x1="' + tx + '" y1="0" x2="' + tx + '" y2="' + totalH + '" stroke="#ef4444" stroke-width="1.6" stroke-dasharray="4 3" opacity=".62"></line>';
     }
 
-    var idx = {};
-    tasks().forEach(function (t, i) { idx[t.id] = i; });
-    tasks().forEach(function (t) {
-      if (!t.predecessorId) return;
-      var p = taskById(t.predecessorId);
-      if (!p || idx[p.id] === undefined || idx[t.id] === undefined) return;
-      var pStartX = xOf(p.start) + 1;
-      var pEndX = xOf(addDays(p.end, 1));
-      var tStartX = xOf(t.start) + 1;
-      var tEndX = xOf(addDays(t.end, 1));
-      var x1 = t.link === 'SS' ? pStartX : pEndX;
-      var x2 = t.link === 'FF' ? tEndX : tStartX;
-      var y1 = idx[p.id] * ROW_H + ROW_H / 2;
-      var y2 = idx[t.id] * ROW_H + ROW_H / 2;
-      var dash = t.link === 'SS' ? ' stroke-dasharray="4 3"' : (t.link === 'FF' ? ' stroke-dasharray="2 3"' : '');
-      var d;
-      if (x2 - x1 >= 8) {
-        var mid = x1 + Math.max(6, Math.min(14, (x2 - x1) / 2));
-        d = 'M' + x1 + ' ' + y1 + ' H' + mid + ' V' + y2 + ' H' + x2;
-      } else {
-        var back = Math.max(2, Math.min(x1, x2) - 12);
-        d = 'M' + x1 + ' ' + y1 + ' H' + back + ' V' + y2 + ' H' + x2;
-      }
-      out += '<path d="' + d + '" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"' + dash + '></path>';
-      out += '<path d="M' + x2 + ' ' + y2 + ' l-7 -3.4 v6.8 z" fill="#94a3b8"></path>';
-    });
+    out += linkPaths(function (t) { return [xOf(t.start) + 1, xOf(addDays(t.end, 1))]; });
     linksSvg.innerHTML = out;
   }
 
+  function updateCycleStats() {
+    var list = tasks();
+    var n = list.length;
+    var sheet = activeSheet();
+    statsbar.textContent = '';
+    function stat(value, label) {
+      var s = el('span', 'stat');
+      s.appendChild(el('b', '', String(value)));
+      s.appendChild(document.createTextNode(' ' + label));
+      statsbar.appendChild(s);
+    }
+    statsbar.appendChild(el('span', 'stat stat-sheet', sheet ? sheet.name : 'Pagina'));
+    statsbar.appendChild(el('span', 'dot'));
+    if (!n) {
+      statsbar.appendChild(el('span', 'stat', 'Nessuna attività in questa pagina.'));
+    } else {
+      var sum = 0;
+      list.forEach(function (t) { sum += t.duration; });
+      stat(n, 'attività');
+      statsbar.appendChild(el('span', 'dot'));
+      stat(fmtSec(sheetCycleTime(sheet)), 'tempo ciclo');
+      statsbar.appendChild(el('span', 'dot'));
+      stat(fmtSec(round1(sum)), 'somma durate');
+    }
+    statsbar.appendChild(el('span', 'dot'));
+    stat(sheets().length, sheets().length === 1 ? 'pagina' : 'pagine');
+    var links = countLinks();
+    var imported = list.filter(function (t) { return t.sourceSheetId; }).length;
+    if (links || imported) {
+      var pill = el('span', 'pill');
+      var parts = [];
+      if (links) parts.push(links + (links === 1 ? ' collegamento' : ' collegamenti'));
+      if (imported) parts.push(imported + (imported === 1 ? ' pagina importata' : ' pagine importate'));
+      pill.textContent = parts.join(' · ');
+      statsbar.appendChild(pill);
+    }
+    updateProjectMeta();
+  }
+
   function updateStats() {
+    if (isCycle()) { updateCycleStats(); return; }
     var list = tasks();
     var n = list.length;
     statsbar.textContent = '';
@@ -1174,6 +1877,13 @@
   }
 
   function updateProjectMeta() {
+    if (isCycle()) {
+      var sh = activeSheet();
+      var nS = sheets().length;
+      projectMetaEl.textContent = 'Tempo ciclo · ' + nS + (nS === 1 ? ' pagina' : ' pagine') +
+        ' · ' + (sh ? sh.name + ': ' + fmtSec(sheetCycleTime(sh)) : '');
+      return;
+    }
     var list = tasks();
     if (!list.length) {
       projectMetaEl.textContent = 'Nessuna attività';
@@ -1196,6 +1906,8 @@
     grid.hidden = emptyNow;
     emptyEl.hidden = !emptyNow;
     if (tlChip) tlChip.style.display = emptyNow ? 'none' : '';
+    var demoBtn = document.getElementById('emptyDemo');
+    if (demoBtn) demoBtn.hidden = isCycle() && projectTaskCount(state.project) > 0;
   }
 
   /* ============================================================
@@ -1216,6 +1928,7 @@
     updateZoomLabel();
     updateMonthChip();
     renderCalendarPanel();
+    renderSheetBar();
     board.scrollTop = st;
     board.scrollLeft = sl;
     if (opts.focusId) {
@@ -1236,12 +1949,13 @@
     renderLinks();
     updateStats();
     updateMonthChip();
+    renderSheetBar();
     saveSoon();
   }
 
   function updateZoomLabel() {
     var label = document.getElementById('zoomLabel');
-    if (label) label.textContent = ZOOMS[state.zoom].label;
+    if (label) label.textContent = (isCycle() ? CYCLE_ZOOMS : ZOOMS)[state.zoom].label;
     var out = document.getElementById('zoomOut');
     var inp = document.getElementById('zoomIn');
     if (out) out.disabled = state.zoom === 0;
@@ -1250,6 +1964,14 @@
 
   function updateMonthChip() {
     if (!tlChip) return;
+    if (isCycle()) {
+      if (!cycleScale || !tasks().length) { tlChip.style.display = 'none'; return; }
+      tlChip.style.display = '';
+      var sec = Math.max(0, board.scrollLeft) / cycleScale.px;
+      sec = Math.floor(sec / cycleScale.minor) * cycleScale.minor;
+      tlChipText.textContent = (activeSheet() ? activeSheet().name + ' · ' : '') + 'da ' + fmtSec(round1(sec));
+      return;
+    }
     if (!range || !timeMap || !timeMap.visible.length || !tasks().length) { tlChip.style.display = 'none'; return; }
     tlChip.style.display = '';
     var px = timeMap.px;
@@ -1268,6 +1990,11 @@
     return Math.max(120, board.clientWidth - leftWidth());
   }
   function scrollToDate(iso, smooth) {
+    if (isCycle()) {
+      if (smooth && typeof board.scrollTo === 'function') board.scrollTo({ left: 0, behavior: 'smooth' });
+      else board.scrollLeft = 0;
+      return;
+    }
     if (!range || !timeMap) return;
     var px = timeMap.px;
     var x = xOf(iso) + 0.5 * px;
@@ -1286,9 +2013,21 @@
     return timeMap.visible[idx];
   }
   function setZoom(delta) {
-    var center = dateAtCenter();
     var next = Math.max(0, Math.min(ZOOMS.length - 1, state.zoom + delta));
     if (next === state.zoom) return;
+    if (isCycle()) {
+      var oldPx = cycleScale ? cycleScale.px : CYCLE_ZOOMS[state.zoom].px;
+      var centerSec = (board.scrollLeft + visibleTimelineWidth() / 2) / oldPx;
+      state.zoom = next;
+      renderTimelineHeader(true);
+      renderBars();
+      renderLinks();
+      board.scrollLeft = Math.max(0, centerSec * cycleScale.px - visibleTimelineWidth() / 2);
+      updateZoomLabel();
+      updateMonthChip();
+      return;
+    }
+    var center = dateAtCenter();
     state.zoom = next;
     renderTimelineHeader(true);
     renderBars();
@@ -1318,9 +2057,15 @@
       return;
     }
     var sel = taskById(state.selectedId);
-    var start = sel ? addDays(sel.end, 1) : todayISO();
-    var t = makeTask({ name: 'Nuova attività', start: start, duration: 3 });
-    state.project.tasks.push(t);
+    var t;
+    if (isCycle()) {
+      var cStart = sel ? sel.end : sheetCycleTime(activeSheet());
+      t = makeCycleTask({ name: 'Nuova attività', start: cStart, duration: 2 });
+    } else {
+      var start = sel ? addDays(sel.end, 1) : todayISO();
+      t = makeTask({ name: 'Nuova attività', start: start, duration: 3 });
+    }
+    tasks().push(t);
     state.selectedId = t.id;
     renderAll();
     var row = grid.querySelector('.row.task[data-id="' + t.id + '"]');
@@ -1341,17 +2086,30 @@
       toast('Limite di ' + MAX_TASKS + ' attività raggiunto.', { type: 'error' });
       return;
     }
-    var copy = makeTask({
-      name: src.name + ' (copia)',
-      start: addDays(src.end, 1),
-      duration: src.duration,
-      color: src.color,
-      predecessorId: src.id,
-      lag: 0,
-      countSat: src.countSat,
-      countSun: src.countSun,
-      countHol: src.countHol
-    });
+    var copy;
+    if (isCycle()) {
+      copy = makeCycleTask({
+        name: src.sourceSheetId ? src.name : src.name + ' (copia)',
+        start: src.end,
+        duration: src.duration,
+        color: src.color,
+        predecessorId: src.id,
+        lag: 0,
+        sourceSheetId: src.sourceSheetId || null
+      });
+    } else {
+      copy = makeTask({
+        name: src.name + ' (copia)',
+        start: addDays(src.end, 1),
+        duration: src.duration,
+        color: src.color,
+        predecessorId: src.id,
+        lag: 0,
+        countSat: src.countSat,
+        countSun: src.countSun,
+        countHol: src.countHol
+      });
+    }
     tasks().splice(indexById(id) + 1, 0, copy);
     state.selectedId = copy.id;
     renderAll({ focusId: copy.id });
@@ -1363,18 +2121,25 @@
     if (idx < 0) return;
     var name = tasks()[idx].name || 'Attività';
     var snapshot = JSON.stringify(tasks());
-    state.project.tasks.splice(idx, 1);
-    state.project.tasks.forEach(function (t) {
+    tasks().splice(idx, 1);
+    tasks().forEach(function (t) {
       if (t.predecessorId === id) t.predecessorId = null;
     });
     if (state.selectedId === id) state.selectedId = null;
+    var sheetAtDelete = isCycle() ? state.project.activeSheet : null;
+    var projectAtDelete = state.project;
     renderAll();
     toast('«' + name + '» eliminata', {
       actionLabel: 'Annulla',
       duration: 7000,
       onAction: function () {
         try {
-          state.project.tasks = JSON.parse(snapshot);
+          if (state.project !== projectAtDelete) return;
+          if (isCycle()) {
+            if (!sheetById(sheetAtDelete)) return;
+            state.project.activeSheet = sheetAtDelete;
+          }
+          setTasks(JSON.parse(snapshot));
           state.selectedId = id;
           renderAll();
           toast('Attività ripristinata.');
@@ -1503,55 +2268,334 @@
     toast('Giorno rosso rimosso: le durate sono state ricalcolate.');
   }
 
+  /* Nuovo lavoro: si sceglie tra diagramma di Gantt e stima tempo ciclo. */
   function changeProject() {
-    if (!tasks().length) {
-      newProject();
-      return;
-    }
-    openConfirm({
-      title: 'Creare un nuovo progetto?',
-      message: 'Il progetto attuale verrà sostituito. Se vuoi conservarlo, esportalo prima in JSON: il salvataggio locale verrà sovrascritto.',
-      okLabel: 'Crea nuovo progetto',
-      danger: true
-    }).then(function (ok) {
-      if (ok) newProject();
+    openTypeChooser(projectTaskCount(state.project) > 0).then(function (type) {
+      if (type) newProject(type);
     });
   }
 
-  function newProject() {
-    state.project = makeProject('Nuovo progetto', []);
+  function openTypeChooser(warn) {
+    return new Promise(function (resolve) {
+      typeModalResolve = resolve;
+      var warnEl = document.getElementById('typeWarn');
+      if (warnEl) warnEl.hidden = !warn;
+      typeModalEl.hidden = false;
+      setTimeout(function () {
+        var first = typeModalEl.querySelector('.type-card');
+        if (first) first.focus();
+      }, 40);
+    });
+  }
+  function closeTypeChooser(value) {
+    if (!typeModalEl || typeModalEl.hidden) return;
+    typeModalEl.hidden = true;
+    var resolve = typeModalResolve;
+    typeModalResolve = null;
+    if (resolve) resolve(value);
+  }
+
+  /* Imposta un progetto appena creato/caricato e aggiorna tutta l'interfaccia. */
+  function setProject(p) {
+    state.project = p;
     state.selectedId = null;
+    colorCursor = projectTaskCount(p);
     headerSig = '';
+    cycleScale = null;
     rebuildHolidayIndex();
+    applyMode();
     syncProjectName();
     renderAll();
+  }
+
+  function newProject(type) {
+    var cyc = type === 'cycle';
+    setProject(cyc ? makeCycleProject('Nuova stima tempo ciclo') : makeProject('Nuovo progetto', []));
     scrollToDate(todayISO());
-    toast('Nuovo progetto pronto. Aggiungi la prima attività.');
+    toast(cyc
+      ? 'Nuova stima tempo ciclo pronta. Aggiungi la prima attività in secondi.'
+      : 'Nuovo progetto pronto. Aggiungi la prima attività.');
     var inp = grid.querySelector('[data-field="name"]');
     if (inp) inp.focus();
   }
 
   function loadDemo() {
-    state.project = demoProject();
-    state.selectedId = null;
-    colorCursor = state.project.tasks.length;
-    headerSig = '';
-    rebuildHolidayIndex();
-    syncProjectName();
-    renderAll();
+    if (isCycle()) {
+      setProject(demoCycleProject());
+      recalc();
+      renderAll();
+      scrollToDate(0);
+      toast('Esempio caricato: la pagina «Ciclo completo» importa le due stazioni con il loro tempo ciclo.');
+      return;
+    }
+    setProject(demoProject());
     scrollToDate(tasks()[0] ? tasks()[0].start : todayISO());
     toast('Esempio caricato: le attività collegate si aggiornano a catena.');
+  }
+
+  /* ---------------- pagine (tempo ciclo) ---------------- */
+  function selectSheet(id) {
+    if (!sheetById(id) || state.project.activeSheet === id) return;
+    state.project.activeSheet = id;
+    state.selectedId = null;
+    headerSig = '';
+    renderAll();
+    board.scrollLeft = 0;
+    board.scrollTop = 0;
+  }
+
+  function uniqueSheetName(base) {
+    var names = {};
+    sheets().forEach(function (s) { names[s.name.toLowerCase()] = true; });
+    if (!names[base.toLowerCase()]) return base;
+    var n = 2;
+    while (names[(base + ' ' + n).toLowerCase()]) n++;
+    return base + ' ' + n;
+  }
+
+  function addSheet() {
+    if (sheets().length >= MAX_SHEETS) {
+      toast('Limite di ' + MAX_SHEETS + ' pagine raggiunto.', { type: 'error' });
+      return;
+    }
+    var n = sheets().length + 1;
+    var name = 'Pagina ' + n;
+    while (sheets().some(function (s) { return s.name.toLowerCase() === name.toLowerCase(); })) name = 'Pagina ' + (++n);
+    var s = makeSheet(name, []);
+    state.project.sheets.push(s);
+    selectSheet(s.id);
+    toast('Pagina «' + s.name + '» aggiunta. Doppio clic sulla linguetta per rinominarla.');
+  }
+
+  function duplicateSheet(id) {
+    var src = sheetById(id);
+    if (!src) return;
+    if (sheets().length >= MAX_SHEETS) {
+      toast('Limite di ' + MAX_SHEETS + ' pagine raggiunto.', { type: 'error' });
+      return;
+    }
+    var idMap = {};
+    var copyTasks = src.tasks.map(function (t) {
+      var c = JSON.parse(JSON.stringify(t));
+      c.id = uid();
+      idMap[t.id] = c.id;
+      return c;
+    });
+    copyTasks.forEach(function (c) { if (c.predecessorId) c.predecessorId = idMap[c.predecessorId] || null; });
+    var s = makeSheet(uniqueSheetName(src.name + ' (copia)'), copyTasks);
+    state.project.sheets.splice(sheets().indexOf(src) + 1, 0, s);
+    selectSheet(s.id);
+    toast('Pagina duplicata: «' + s.name + '».');
+  }
+
+  function renameSheet(id, name) {
+    var s = sheetById(id);
+    if (!s) return;
+    name = String(name || '').trim().slice(0, 60);
+    if (!name) { renderSheetBar(); return; }
+    s.name = name;
+    recalc();
+    renderAll();
+  }
+
+  function deleteSheet(id) {
+    var s = sheetById(id);
+    if (!s) return;
+    if (sheets().length <= 1) {
+      toast('Deve esserci almeno una pagina.', { type: 'error' });
+      return;
+    }
+    var users = [];
+    sheets().forEach(function (o) {
+      if (o.tasks.some(function (t) { return t.sourceSheetId === id; })) users.push(o.name);
+    });
+    var msg = 'La pagina e le sue ' + s.tasks.length + ' attività verranno eliminate.' +
+      (users.length ? ' È importata in: ' + users.join(', ') + '; lì diventerà un’attività normale con l’ultima durata calcolata (' + fmtSec(sheetCycleTime(s)) + ').' : '');
+    openConfirm({
+      title: 'Eliminare la pagina «' + s.name + '»?',
+      message: msg,
+      okLabel: 'Elimina pagina',
+      danger: true
+    }).then(function (ok) {
+      if (!ok) return;
+      var snapshot = JSON.stringify(state.project.sheets);
+      var activeBefore = state.project.activeSheet;
+      var projectAtDelete = state.project;
+      var idx = sheets().indexOf(s);
+      sheets().forEach(function (o) {
+        o.tasks.forEach(function (t) { if (t.sourceSheetId === id) t.sourceSheetId = null; });
+      });
+      state.project.sheets.splice(idx, 1);
+      if (state.project.activeSheet === id) state.project.activeSheet = sheets()[Math.max(0, idx - 1)].id;
+      state.selectedId = null;
+      headerSig = '';
+      renderAll();
+      toast('Pagina «' + s.name + '» eliminata', {
+        actionLabel: 'Annulla',
+        duration: 7000,
+        onAction: function () {
+          if (state.project !== projectAtDelete) return;
+          try {
+            state.project.sheets = JSON.parse(snapshot);
+            state.project.activeSheet = activeBefore;
+            headerSig = '';
+            renderAll();
+            toast('Pagina ripristinata.');
+          } catch (e) { /* ignore */ }
+        }
+      });
+    });
+  }
+
+  function moveSheet(id, delta) {
+    var list = sheets();
+    var i = list.indexOf(sheetById(id));
+    var j = i + delta;
+    if (i < 0 || j < 0 || j >= list.length) return;
+    var tmp = list[i];
+    list[i] = list[j];
+    list[j] = tmp;
+    renderSheetBar();
+    saveSoon();
+  }
+
+  /* Inserisce una pagina nella pagina attiva come attività collegata. */
+  function importSheet(sourceId) {
+    var into = activeSheet();
+    var src = sheetById(sourceId);
+    if (!into || !src) return;
+    if (!canImportSheet(sourceId, into.id)) {
+      toast('Importazione non possibile: «' + src.name + '» contiene già questa pagina (si creerebbe un ciclo).', { type: 'error' });
+      return;
+    }
+    if (into.tasks.length >= MAX_TASKS) {
+      toast('Limite di ' + MAX_TASKS + ' attività raggiunto.', { type: 'error' });
+      return;
+    }
+    var sel = taskById(state.selectedId);
+    var t = makeCycleTask({
+      name: src.name,
+      sourceSheetId: src.id,
+      start: sel ? sel.end : sheetCycleTime(into),
+      duration: sheetCycleTime(src),
+      color: src.tasks[0] ? src.tasks[0].color : nextColor()
+    });
+    into.tasks.push(t);
+    state.selectedId = t.id;
+    renderAll();
+    toast('«' + src.name + '» importata come attività: ' + fmtSec(sheetCycleTime(src)) + ' (si aggiorna automaticamente).');
+  }
+
+  function renderSheetBar() {
+    if (!sheetBarEl || !sheetTabsEl) return;
+    if (!isCycle()) { sheetBarEl.hidden = true; return; }
+    sheetBarEl.hidden = false;
+    if (sheetTabsEl.querySelector('.sheet-rename')) return;
+    var active = activeSheet();
+    sheetTabsEl.textContent = '';
+    sheets().forEach(function (s, i) {
+      var tab = el('div', 'sheet-tab' + (active && s.id === active.id ? ' active' : ''));
+      tab.dataset.id = s.id;
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-selected', active && s.id === active.id ? 'true' : 'false');
+      tab.tabIndex = 0;
+      tab.title = s.name + ' · tempo ciclo ' + fmtSec(sheetCycleTime(s)) + '\nDoppio clic per rinominare';
+      var label = el('span', 'sheet-name', s.name);
+      tab.appendChild(label);
+      tab.appendChild(el('span', 'sheet-ct', fmtSec(sheetCycleTime(s))));
+      if (active && s.id === active.id) {
+        var tools = el('span', 'sheet-tools');
+        [['left', '‹', 'Sposta a sinistra', i === 0],
+          ['right', '›', 'Sposta a destra', i === sheets().length - 1],
+          ['dup', '⧉', 'Duplica pagina', false],
+          ['del', '×', 'Elimina pagina', sheets().length <= 1]].forEach(function (b) {
+          var btn = el('button', 'sheet-btn sheet-' + b[0], b[1]);
+          btn.type = 'button';
+          btn.dataset.sheetAction = b[0];
+          btn.title = b[2];
+          btn.setAttribute('aria-label', b[2]);
+          btn.disabled = b[3];
+          tools.appendChild(btn);
+        });
+        tab.appendChild(tools);
+      }
+      sheetTabsEl.appendChild(tab);
+    });
+
+    if (importSheetSel) {
+      importSheetSel.textContent = '';
+      importSheetSel.appendChild(new Option('Importa pagina come attività…', ''));
+      var count = 0;
+      sheets().forEach(function (s) {
+        if (!active || s.id === active.id) return;
+        var opt = new Option(s.name + ' (' + fmtSec(sheetCycleTime(s)) + ')', s.id);
+        if (!canImportSheet(s.id, active.id)) {
+          opt.disabled = true;
+          opt.textContent += ' — contiene questa pagina';
+        } else {
+          count++;
+        }
+        importSheetSel.appendChild(opt);
+      });
+      importSheetSel.disabled = !count;
+      importSheetSel.title = count
+        ? 'Inserisce la pagina scelta come attività con nome e tempo ciclo, aggiornati automaticamente'
+        : 'Aggiungi un’altra pagina per poterla importare qui';
+      importSheetSel.value = '';
+    }
+  }
+
+  function startRenameSheet(tab) {
+    var s = sheetById(tab.dataset.id);
+    if (!s) return;
+    var label = tab.querySelector('.sheet-name');
+    var inp = el('input', 'sheet-rename');
+    inp.value = s.name;
+    inp.maxLength = 60;
+    inp.setAttribute('aria-label', 'Nome della pagina');
+    label.replaceWith(inp);
+    inp.focus();
+    inp.select();
+    var done = false;
+    function finish(save) {
+      if (done) return;
+      done = true;
+      var value = inp.value;
+      inp.remove();
+      if (save) renameSheet(s.id, value);
+      else renderSheetBar();
+    }
+    inp.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+    });
+    inp.addEventListener('blur', function () { finish(true); });
+  }
+
+  function onSheetBarClick(e) {
+    var btn = e.target.closest('[data-sheet-action]');
+    var tab = e.target.closest('.sheet-tab');
+    if (btn && tab) {
+      var id = tab.dataset.id;
+      var a = btn.dataset.sheetAction;
+      if (a === 'left') moveSheet(id, -1);
+      else if (a === 'right') moveSheet(id, 1);
+      else if (a === 'dup') duplicateSheet(id);
+      else if (a === 'del') deleteSheet(id);
+      return;
+    }
+    if (tab && !e.target.closest('.sheet-rename')) selectSheet(tab.dataset.id);
   }
 
   function exportJSON() {
     saveNow();
     var payload = {
       format: 'ganttflow-project',
-      version: 3,
+      version: 4,
       exportedAt: new Date().toISOString(),
       project: state.project
     };
-    var name = slugify(state.project.name) + '-' + todayISO() + '.json';
+    var name = slugify(state.project.name) + (isCycle() ? '-tempo-ciclo' : '') + '-' + todayISO() + '.json';
     download(name, JSON.stringify(payload, null, 2), 'application/json');
     toast('Progetto esportato: ' + name);
   }
@@ -1582,18 +2626,15 @@
       try {
         var data = JSON.parse(String(reader.result));
         var raw = data && data.project ? data.project : data;
-        var p = sanitizeProject(raw);
-        if (!p.tasks.length) throw new Error('Il file non contiene attività.');
-        state.project = p;
-        state.selectedId = null;
-        colorCursor = p.tasks.length;
-        headerSig = '';
-        rebuildHolidayIndex();
-        syncProjectName();
-        renderAll();
+        var p = sanitizeAny(raw);
+        var count = projectTaskCount(p);
+        if (p.type !== 'cycle' && !count) throw new Error('Il file non contiene attività.');
+        setProject(p);
         scrollToDate(tasks()[0] ? tasks()[0].start : todayISO());
         saveNow();
-        toast('Progetto «' + p.name + '» importato: ' + p.tasks.length + ' attività.');
+        toast(p.type === 'cycle'
+          ? 'Tempo ciclo «' + p.name + '» importato: ' + p.sheets.length + (p.sheets.length === 1 ? ' pagina, ' : ' pagine, ') + count + ' attività.'
+          : 'Progetto «' + p.name + '» importato: ' + count + ' attività.');
       } catch (err) {
         toast(err && err.message ? err.message : 'File non valido.', { type: 'error' });
       }
@@ -1676,6 +2717,34 @@
   /* ============================================================
      EVENTI
      ============================================================ */
+  function onCycleInput(t, field, input) {
+    var v = parseFloat(String(input.value).replace(',', '.'));
+    if (field === 'duration') {
+      if (t.sourceSheetId || !Number.isFinite(v) || v < 0.1) return;
+      t.duration = clampSec(v, 0.1, MAX_SECONDS, 1);
+      afterEdit();
+      return;
+    }
+    if (field === 'start') {
+      if (t.predecessorId || !Number.isFinite(v) || v < 0) return;
+      t.start = clampSec(v, 0, MAX_SECONDS, 0);
+      afterEdit();
+      return;
+    }
+    if (field === 'end') {
+      if (t.sourceSheetId || (t.predecessorId && t.link === 'FF') || !Number.isFinite(v)) return;
+      var d = round1(v - t.start);
+      if (d < 0.1) return;
+      t.duration = clampSec(d, 0.1, MAX_SECONDS, 1);
+      afterEdit();
+      return;
+    }
+    if (field === 'lag') {
+      t.lag = Number.isFinite(v) && v > 0 ? clampSec(v, 0, MAX_LAG_SECONDS, 0) : 0;
+      afterEdit();
+    }
+  }
+
   function onGridInput(e) {
     var input = e.target;
     var field = input.dataset ? input.dataset.field : null;
@@ -1686,12 +2755,14 @@
     if (!t) return;
 
     if (field === 'name') {
+      if (t.sourceSheetId) return;
       t.name = input.value.slice(0, 120);
       updateOptionLabels();
       renderBars();
       saveSoon();
       return;
     }
+    if (isCycle()) { onCycleInput(t, field, input); return; }
     if (field === 'duration') {
       var dur = parseInt(input.value, 10);
       if (!Number.isFinite(dur) || dur < 1) return;
@@ -1757,6 +2828,16 @@
     if (field === 'countSat' || field === 'countSun' || field === 'countHol') {
       t[field] = input.checked === true;
       afterEdit();
+      return;
+    }
+    if (isCycle() && (field === 'duration' || field === 'start' || field === 'end' || field === 'lag')) {
+      if (field === 'end') {
+        var ev = parseFloat(String(input.value).replace(',', '.'));
+        if (Number.isFinite(ev) && round1(ev - t.start) < 0.1) {
+          toast('La fine deve essere successiva all’inizio (' + fmtSec(t.start) + ').', { type: 'error' });
+        }
+      }
+      input.value = secText(t[field]);
       return;
     }
     if (field === 'duration') {
@@ -1884,6 +2965,35 @@
     if (btnCustom) btnCustom.addEventListener('click', addCustomHoliday);
     var btnResetCols = document.getElementById('btnResetCols');
     if (btnResetCols) btnResetCols.addEventListener('click', resetColumnWidths);
+    var btnResetCols2 = document.getElementById('btnResetColsCycle');
+    if (btnResetCols2) btnResetCols2.addEventListener('click', resetColumnWidths);
+
+    /* barra delle pagine (tempo ciclo) */
+    sheetTabsEl.addEventListener('click', onSheetBarClick);
+    sheetTabsEl.addEventListener('dblclick', function (e) {
+      var tab = e.target.closest('.sheet-tab');
+      if (tab && !e.target.closest('[data-sheet-action]') && !e.target.closest('.sheet-rename')) startRenameSheet(tab);
+    });
+    sheetTabsEl.addEventListener('keydown', function (e) {
+      var tab = e.target.closest('.sheet-tab');
+      if (!tab || e.target !== tab) return;
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectSheet(tab.dataset.id); }
+      else if (e.key === 'F2') { e.preventDefault(); startRenameSheet(tab); }
+    });
+    document.getElementById('btnAddSheet').addEventListener('click', addSheet);
+    importSheetSel.addEventListener('change', function () {
+      var id = importSheetSel.value;
+      importSheetSel.value = '';
+      if (id) importSheet(id);
+    });
+
+    /* scelta del tipo di lavoro */
+    typeModalEl.addEventListener('click', function (e) {
+      var card = e.target.closest('.type-card');
+      if (card) { closeTypeChooser(card.dataset.type); return; }
+      if (e.target.closest('#typeCancel')) closeTypeChooser(null);
+    });
+    typeModalEl.addEventListener('mousedown', function (e) { if (e.target === typeModalEl) closeTypeChooser(null); });
     [hideStartEl, hideEndEl].forEach(function (inp) {
       if (inp) inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); addHiddenRange(); } });
     });
@@ -1908,6 +3018,10 @@
     });
     document.addEventListener('keydown', function (e) {
       if (!modalEl.hidden && e.key === 'Escape') { e.preventDefault(); closeModal(false); return; }
+      if (typeModalEl && !typeModalEl.hidden) {
+        if (e.key === 'Escape') { e.preventDefault(); closeTypeChooser(null); }
+        return;
+      }
       if (e.key === 'Escape') closeColorPops(null);
       if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 's') {
         e.preventDefault();
@@ -1919,7 +3033,11 @@
       }
     });
 
-    window.addEventListener('resize', function () { renderLinks(); updateMonthChip(); });
+    window.addEventListener('resize', function () {
+      if (isCycle()) { renderTimelineHeader(false); renderBars(); }
+      renderLinks();
+      updateMonthChip();
+    });
 
     board.addEventListener('scroll', function () {
       if (chipRaf) return;
@@ -1946,7 +3064,7 @@
       var raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return null;
       var data = JSON.parse(raw);
-      return sanitizeProject(data && data.project ? data.project : data);
+      return sanitizeAny(data && data.project ? data.project : data);
     } catch (e) {
       return null;
     }
@@ -1975,19 +3093,24 @@
     customDateEl = document.getElementById('customDate');
     customNameEl = document.getElementById('customName');
     customChipsEl = document.getElementById('customChips');
+    sheetBarEl = document.getElementById('sheetBar');
+    sheetTabsEl = document.getElementById('sheetTabs');
+    importSheetSel = document.getElementById('importSheetSel');
+    typeModalEl = document.getElementById('typeModal');
 
     var stored = readStoredProject();
     state.project = stored || demoProject();
-    colorCursor = tasks().length;
+    colorCursor = projectTaskCount(state.project);
     if (stored) state.project.name = state.project.name || 'Progetto senza titolo';
     rebuildHolidayIndex();
     syncProjectName();
 
     bindEvents();
-    initColumnLayout();
+    applyMode();
     renderAll();
 
     requestAnimationFrame(function () {
+      if (isCycle()) { renderAll(); return; }
       var t0 = todayISO();
       var focusDate = tasks().length ? tasks()[0].start : t0;
       if (range && (focusDate < range.start || focusDate > range.end)) focusDate = t0;

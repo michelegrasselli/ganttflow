@@ -35,7 +35,7 @@
         </div>
         <button type="button" class="btn ghost" id="btnToday" title="Vai a oggi">Oggi</button>
         <span class="divider" aria-hidden="true"></span>
-        <button type="button" class="btn ghost" id="btnNew" title="Crea un nuovo progetto">Nuovo</button>
+        <button type="button" class="btn ghost" id="btnNew" title="Crea un nuovo lavoro: Gantt o stima tempo ciclo">Nuovo</button>
         <button type="button" class="btn ghost" id="btnImport" title="Importa un progetto .json">Importa</button>
         <button type="button" class="btn ghost" id="btnJson" title="Esporta il progetto in JSON (Ctrl+S)">Esporta</button>
         <button type="button" class="btn dark" id="btnPdf" title="Esporta il diagramma in PDF">
@@ -73,6 +73,17 @@
       </div>
     </main>
 
+    <nav class="sheetbar" id="sheetBar" aria-label="Pagine del tempo ciclo" hidden>
+      <div class="sheet-tabs" id="sheetTabs" role="tablist"></div>
+      <button type="button" class="sheet-add" id="btnAddSheet" title="Aggiungi una pagina" aria-label="Aggiungi una pagina">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+      <div class="sheet-side">
+        <select class="cal-inp sheet-import" id="importSheetSel" aria-label="Importa un'altra pagina come attività"></select>
+        <button type="button" class="cal-reset" id="btnResetColsCycle" title="Ripristina la larghezza predefinita delle colonne">Ripristina colonne</button>
+      </div>
+    </nav>
+
     <section class="calpanel" id="calPanel" aria-label="Calendario personalizzato">
       <div class="cal-block">
         <span class="cal-label" title="Nasconde un intervallo dal diagramma: le date non occupano spazio. Le durate delle attività non cambiano.">Periodo nascosto</span>
@@ -100,7 +111,7 @@
       <span id="saveStatus">Salvataggio automatico attivo</span>
       <span class="legend"><i class="lg lg-we" aria-hidden="true"></i>Weekend<i class="lg lg-hol" aria-hidden="true"></i>Festivo</span>
       <span class="status-hint">Trascina i bordi delle intestazioni per ridimensionare le colonne · Spunte Sab/Dom/Fest: giorni inclusi nella durata.</span>
-      <span class="version">v1.4</span>
+      <span class="version">v1.5</span>
     </footer>
   </div>
 
@@ -112,6 +123,34 @@
       <div class="modal-actions">
         <button type="button" class="btn ghost" id="modalCancel">Annulla</button>
         <button type="button" class="btn primary" id="modalOk">Conferma</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="typeModal" hidden>
+    <div class="modal modal-type" role="dialog" aria-modal="true" aria-labelledby="typeTitle">
+      <div class="modal-icon" aria-hidden="true">+</div>
+      <h2 id="typeTitle">Nuovo lavoro</h2>
+      <p>Scegli il tipo di grafico da creare.</p>
+      <div class="type-cards">
+        <button type="button" class="type-card" data-type="gantt">
+          <span class="type-ico" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none"><rect x="3" y="5" width="26" height="22" rx="4" stroke="currentColor" stroke-width="1.8"/><path d="M3 11h26" stroke="currentColor" stroke-width="1.8"/><rect x="7" y="14" width="10" height="3.4" rx="1.7" fill="currentColor"/><rect x="13" y="20" width="12" height="3.4" rx="1.7" fill="currentColor" opacity=".55"/></svg>
+          </span>
+          <b>Diagramma di Gantt</b>
+          <span class="type-desc">Attività su calendario in giorni, con weekend, festivi, periodi nascosti e vincoli.</span>
+        </button>
+        <button type="button" class="type-card" data-type="cycle">
+          <span class="type-ico" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="17" r="11" stroke="currentColor" stroke-width="1.8"/><path d="M16 10v7l4.5 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 3.5h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </span>
+          <b>Stima tempo ciclo</b>
+          <span class="type-desc">Attività in secondi su più pagine; una pagina si può importare in un’altra con nome e tempo ciclo.</span>
+        </button>
+      </div>
+      <p class="type-warn" id="typeWarn">Il lavoro attuale verrà sostituito: se vuoi conservarlo, esportalo prima in JSON.</p>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" id="typeCancel">Annulla</button>
       </div>
     </div>
   </div>

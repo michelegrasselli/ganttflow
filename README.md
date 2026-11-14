@@ -1,7 +1,14 @@
 # GanttFlow
 
 Pianificatore di attività con diagramma di Gantt, dipendenze automatiche,
-esportazione PDF e file di progetto reimportabile.
+esportazione PDF e file di progetto reimportabile. Include anche un grafico di
+**stima del tempo ciclo** in secondi, organizzato in più pagine.
+
+Con **Nuovo** si sceglie il tipo di lavoro da creare:
+
+- **Diagramma di Gantt** — attività su calendario in giorni (descritto qui sotto);
+- **Stima tempo ciclo** — attività in secondi su più pagine (vedi
+  [Stima tempo ciclo](#stima-tempo-ciclo)).
 
 App statica, **senza dipendenze e senza build**: si apre `index.html` nel browser
 e funziona anche completamente offline.
@@ -140,6 +147,39 @@ bordo. Fai **doppio clic** sul bordo, oppure usa **Ripristina colonne** in basso
 destra, per tornare alle larghezze predefinite. La scelta viene ricordata nel browser
 e non modifica il file del progetto.
 
+### Stima tempo ciclo
+
+Scegliendo **Nuovo → Stima tempo ciclo** si crea un grafico con la stessa grafica del
+Gantt, ma con la scala in **secondi** (decimi ammessi, es. `2,5`):
+
+- ogni attività ha **nome**, **durata (s)**, **secondo di inizio** e **secondo di fine**
+  (fine = inizio + durata; modificando la fine si ricalcola la durata);
+- valgono gli stessi vincoli del Gantt, con offset in secondi (0–3600):
+  **Inizia dopo** (`inizio = fine collegata + offset`), **Inizia con**
+  (`inizio = inizio collegata + offset`), **Finisce prima**
+  (`fine = fine collegata − offset`);
+- il **tempo ciclo** della pagina è il secondo in cui termina l'ultima attività: è
+  indicato da una linea rossa tratteggiata con l'etichetta `TC`;
+- il righello mostra secondi principali e intermedi e si adatta ai 4 livelli di zoom.
+
+**Pagine.** In basso, come in un foglio di calcolo, ci sono le linguette delle pagine:
+
+- **+** aggiunge una pagina; clic per aprirla; **doppio clic** (o `F2`) per rinominarla;
+- sulla pagina attiva: **‹ ›** spostano la linguetta, **⧉** duplica la pagina,
+  **×** la elimina (con annullamento);
+- ogni linguetta mostra il tempo ciclo della pagina.
+
+**Importare una pagina.** Dal menu **Importa pagina come attività…** si inserisce
+un'altra pagina nella pagina attiva come **una sola attività** con il nome della pagina
+e durata pari al suo tempo ciclo. L'attività è **collegata**: se modifichi o rinomini la
+pagina sorgente, nome e durata si aggiornano da soli (sono bloccati in modifica). Si può
+comunque collegarla ad altre attività con i vincoli. Non è possibile importare una
+pagina che contiene già (anche indirettamente) quella attiva. Se la pagina sorgente
+viene eliminata, l'attività diventa normale con l'ultima durata calcolata.
+
+Il PDF della stima tempo ciclo contiene **tutte le pagine**, ognuna con tabella,
+righello dei secondi e linea del tempo ciclo.
+
 ### Scorciatoie
 
 | Tasto | Azione |
@@ -211,6 +251,37 @@ Il file esportato è JSON e può essere reimportato con il pulsante **Importa**:
 - In importazione i dati vengono validati: id non validi rigenerati, riferimenti
   inesistenti rimossi, durate e lag limitati ai valori ammessi, `link` sconosciuti
   riportati a `FS`.
+- Dalla versione 4 il progetto ha il campo `type`: `"gantt"` (predefinito se assente)
+  oppure `"cycle"`.
+
+Una **stima tempo ciclo** ha invece le pagine al posto dell'elenco `tasks`:
+
+```json
+{
+  "format": "ganttflow-project",
+  "version": 4,
+  "project": {
+    "type": "cycle",
+    "name": "Cella di lavorazione",
+    "activeSheet": "s2",
+    "sheets": [
+      { "id": "s1", "name": "Stazione 1", "tasks": [
+        { "id": "a1", "name": "Prelievo pezzo", "start": 0, "end": 3.5, "duration": 3.5,
+          "color": "#6366f1", "predecessorId": null, "link": "FS", "lag": 0, "sourceSheetId": null }
+      ] },
+      { "id": "s2", "name": "Ciclo completo", "tasks": [
+        { "id": "b1", "name": "Stazione 1", "start": 0, "end": 3.5, "duration": 3.5,
+          "color": "#6366f1", "predecessorId": null, "link": "FS", "lag": 0, "sourceSheetId": "s1" }
+      ] }
+    ]
+  }
+}
+```
+
+- `start`, `end`, `duration` e `lag` sono secondi con al massimo un decimale.
+- `sourceSheetId` è `null` oppure l'id della pagina importata: in quel caso nome e
+  durata vengono ricalcolati dalla pagina sorgente. Riferimenti mancanti o ciclici
+  vengono rimossi in importazione.
 
 ## Note sul PDF
 

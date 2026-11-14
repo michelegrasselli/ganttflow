@@ -499,10 +499,196 @@ window.GanttPDF = (function () {
     return ops.join('\n') + '\n';
   }
 
+  /* ===================== stima tempo ciclo (secondi) ===================== */
+  var STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200];
+  var CT_COLOR = [0.88, 0.2, 0.2];
+  function r1(v) { return Math.round((+v || 0) * 10) / 10; }
+  function fmtS(v) { return String(r1(v)); }
+  function pickStep(minPt, scale, multipleOf) {
+    for (var i = 0; i < STEPS.length; i++) {
+      var s = STEPS[i];
+      if (multipleOf) {
+        var r = s / multipleOf;
+        if (r < 2 || Math.abs(r - Math.round(r)) > 1e-6) continue;
+      }
+      if (s * scale >= minPt) return s;
+    }
+    return STEPS[STEPS.length - 1];
+  }
+
+  function prepareCycleSheet(sheet, allSheets) {
+    var names = {};
+    allSheets.forEach(function (s) { names[s.id] = s.name; });
+    var list = (Array.isArray(sheet.tasks) ? sheet.tasks : []).map(function (t, i) {
+      return {
+        index: i,
+        id: t.id,
+        name: t.name || 'Task',
+        start: r1(t.start),
+        end: r1(t.end),
+        duration: r1(t.duration),
+        color: /^#[0-9a-fA-F]{6}$/.test(t.color || '') ? t.color : '#6366f1',
+        predecessorId: t.predecessorId || null,
+        link: LINK_LABEL[t.link] ? t.link : 'FS',
+        sheet: t.sourceSheetId && names[t.sourceSheetId] ? names[t.sourceSheetId] : null
+      };
+    });
+    var ct = 0;
+    list.forEach(function (t) { if (t.end > ct) ct = t.end; });
+    ct = r1(ct);
+    var roughTotal = Math.max(ct * 1.05, 1);
+    var scale0 = TL_W / roughTotal;
+    var minor = pickStep(9, scale0);
+    var major = pickStep(42, scale0, minor);
+    var nMajor = Math.max(1, Math.ceil(roughTotal / major - 1e-9));
+    var total = nMajor * major;
+    var pages = [];
+    if (!list.length) pages.push([]);
+    for (var i = 0; i < list.length; i += ROWS_PER_PAGE) pages.push(list.slice(i, i + ROWS_PER_PAGE));
+    return {
+      sheet: sheet,
+      tasks: list,
+      cycleTime: ct,
+      total: total,
+      minor: minor,
+      major: major,
+      scale: TL_W / total,
+      pages: pages
+    };
+  }
+
+  function renderCyclePage(project, data, pageIndex, pageNo, pageCount) {
+    var ops = [];
+    var rows = data.pages[pageIndex] || [];
+    var list = data.tasks;
+    var tlX = COL.timeline;
+    var sc = data.scale;
+    function xs(v) { return tlX + v * sc; }
+
+    rows.forEach(function (t, i) {
+      if (i % 2 === 1) opsRect(ops, M, ROWS_TOP - (i + 1) * ROW_H, PAGE_W - M * 2, ROW_H, [0.965, 0.972, 0.988]);
+    });
+
+    /* intestazione */
+    opsText(ops, M, 558, fit(project.name || 'Untitled cycle time estimate', PAGE_W - M * 2 - 150, 18, true), 18, { bold: true });
+    var meta = 'Cycle time estimate  ·  sheet "' + (data.sheet.name || 'Sheet') + '"  ·  ' +
+      list.length + (list.length === 1 ? ' task' : ' tasks') +
+      '  ·  cycle time ' + fmtS(data.cycleTime) + ' s' +
+      '  ·  generated ' + fmtNum(todayISO());
+    opsText(ops, M, 541, fit(meta, PAGE_W - M * 2, 8, false), 8, { color: MUTED });
+    opsLine(ops, M, 530, PAGE_W - M, 530, 1, [0.88, 0.9, 0.94]);
+
+    opsText(ops, COL.no, 519, '#', 6.5, { bold: true, color: MUTED });
+    opsText(ops, COL.name, 519, 'ACTIVITY', 6.5, { bold: true, color: MUTED });
+    opsText(ops, COL.durRight, 519, 'SEC', 6.5, { bold: true, color: MUTED, align: 'right' });
+    opsText(ops, COL.start, 519, 'START', 6.5, { bold: true, color: MUTED });
+    opsText(ops, COL.end, 519, 'END', 6.5, { bold: true, color: MUTED });
+    opsText(ops, COL.after, 519, 'LINK', 6.5, { bold: true, color: MUTED, align: 'right' });
+
+    /* righello dei secondi */
+    var nMinor = Math.round(data.total / data.minor);
+    var ratio = Math.round(data.major / data.minor);
+    for (var k = 0; k <= nMinor; k++) {
+      var v = r1(k * data.minor);
+      var x = xs(v);
+      var isMajor = k % ratio === 0;
+      if (isMajor) {
+        if (k < nMinor) opsText(ops, x + 1.5, 519, fmtS(v) + ' s', 6.5, { bold: true, color: [0.28, 0.33, 0.42] });
+        opsLine(ops, x, ROWS_BOTTOM, x, 512, 0.6, [0.8, 0.84, 0.9]);
+      } else {
+        opsLine(ops, x, ROWS_BOTTOM, x, ROWS_TOP, 0.3, [0.92, 0.93, 0.96]);
+        opsLine(ops, x, 489, x, 493, 0.4, [0.7, 0.74, 0.8]);
+        if (data.minor * sc >= 14) opsText(ops, x, 496, fmtS(v), 5, { color: [0.45, 0.5, 0.6], align: 'center' });
+      }
+    }
+    opsLine(ops, M, 489, PAGE_W - M, 489, 1, [0.78, 0.82, 0.89]);
+    opsLine(ops, tlX - 10, 489, tlX - 10, ROWS_BOTTOM, 0.8, [0.88, 0.9, 0.94]);
+
+    /* linea del tempo ciclo */
+    if (data.cycleTime > 0) {
+      var cx = xs(data.cycleTime);
+      opsLine(ops, cx, ROWS_BOTTOM, cx, ROWS_TOP, 1, CT_COLOR, '2 2');
+      var label = 'CT ' + fmtS(data.cycleTime) + ' s';
+      var lw = estWidth(label, 6, true) + 6;
+      var lx = Math.min(cx - lw / 2, PAGE_W - M - lw);
+      opsRect(ops, lx, 497, lw, 9, CT_COLOR);
+      opsText(ops, lx + 3, 499.6, label, 6, { bold: true, color: [1, 1, 1] });
+    }
+
+    /* collegamenti */
+    var pos = {};
+    list.forEach(function (t, i) { pos[t.id] = i; });
+    var pageStart = pageIndex * ROWS_PER_PAGE;
+    rows.forEach(function (t, i) {
+      if (!t.predecessorId) return;
+      var pi = pos[t.predecessorId];
+      if (pi === undefined || pi < pageStart || pi >= pageStart + rows.length) return;
+      var pred = list[pi];
+      var x1 = t.link === 'SS' ? xs(pred.start) : xs(pred.end);
+      var x2 = t.link === 'FF' ? xs(t.end) : xs(t.start);
+      var y1 = ROWS_TOP - (pi - pageStart + 0.5) * ROW_H;
+      var y2 = ROWS_TOP - (i + 0.5) * ROW_H;
+      var dash = t.link === 'SS' ? '[2 1.5] 0 d ' : (t.link === 'FF' ? '[1 1.5] 0 d ' : '');
+      var mid = x2 - x1 >= 4 ? x1 + Math.min(8, (x2 - x1) / 2) : Math.max(tlX + 1, Math.min(x1, x2) - 6);
+      var path = num(x1) + ' ' + num(y1) + ' m ' + num(mid) + ' ' + num(y1) + ' l ' +
+        num(mid) + ' ' + num(y2) + ' l ' + num(x2 - 2) + ' ' + num(y2) + ' l';
+      ops.push('q 0.45 0.5 0.6 RG 0.7 w ' + dash + path + ' S Q');
+      ops.push('q 0.45 0.5 0.6 rg ' + num(x2) + ' ' + num(y2) + ' m ' + num(x2 - 4) + ' ' + num(y2 + 1.8) + ' l ' +
+        num(x2 - 4) + ' ' + num(y2 - 1.8) + ' l f Q');
+    });
+
+    /* righe */
+    rows.forEach(function (t, i) {
+      var top = ROWS_TOP - (i + 1) * ROW_H;
+      var cy = top + ROW_H / 2;
+      opsText(ops, COL.no, cy - 2.2, String(pageStart + i + 1), 6.5, { color: [0.6, 0.66, 0.75] });
+      opsText(ops, COL.name, cy - 2.4, fit((t.sheet ? '[sheet] ' : '') + t.name, COL.nameW, 7.5, false), 7.5, { bold: !!t.sheet });
+      opsText(ops, COL.durRight, cy - 2.4, fmtS(t.duration), 7.5, { align: 'right' });
+      opsText(ops, COL.start, cy - 2.4, fmtS(t.start) + ' s', 7);
+      opsText(ops, COL.end, cy - 2.4, fmtS(t.end) + ' s', 7);
+      var pi = t.predecessorId ? pos[t.predecessorId] : undefined;
+      if (pi !== undefined) opsText(ops, COL.after, cy - 2.4, (LINK_LABEL[t.link] || 'after') + ' #' + (pi + 1), 7, { color: MUTED, align: 'right' });
+      var x = xs(t.start);
+      var bw = Math.max(1.4, t.duration * sc);
+      var c = hexRgb(t.color);
+      opsRect(ops, x, cy - 4.5, bw, 9, c, [Math.max(0, c[0] - .18), Math.max(0, c[1] - .18), Math.max(0, c[2] - .18)]);
+    });
+
+    /* piè di pagina */
+    opsLine(ops, M, 36, PAGE_W - M, 36, 0.7, [0.9, 0.92, 0.95]);
+    opsText(ops, M, 23, fit('GanttFlow · ' + (project.name || 'Project') + ' · ' + (data.sheet.name || 'Sheet'), 320, 7, false), 7, { color: MUTED });
+    opsLine(ops, 372, 23.5, 384, 23.5, 1, CT_COLOR, '2 2');
+    opsText(ops, 388, 21.5, 'cycle time', 6.5, { color: MUTED });
+    opsText(ops, 436, 21.5, '[sheet] = imported sheet (duration = its cycle time)', 6.5, { color: MUTED });
+    opsText(ops, PAGE_W - M, 23, 'Page ' + pageNo + ' of ' + pageCount, 7, { color: MUTED, align: 'right' });
+    if (!list.length) opsText(ops, PAGE_W / 2, 300, 'No activities in this sheet', 12, { color: MUTED, align: 'center' });
+    return ops.join('\n') + '\n';
+  }
+
+  function cycleContents(project) {
+    var sheets = Array.isArray(project.sheets) ? project.sheets : [];
+    var prepared = sheets.map(function (s) { return prepareCycleSheet(s, sheets); });
+    var count = 0;
+    prepared.forEach(function (d) { count += d.pages.length; });
+    var out = [];
+    prepared.forEach(function (d) {
+      for (var p = 0; p < d.pages.length; p++) out.push(renderCyclePage(project, d, p, out.length + 1, count));
+    });
+    if (!out.length) out.push('');
+    return out;
+  }
+
   /* --------------------------- build / download --------------------------- */
   function build(project) {
-    var data = prepare(project);
-    var pageCount = data.pages.length;
+    var contents;
+    if (project && project.type === 'cycle') {
+      contents = cycleContents(project);
+    } else {
+      var data = prepare(project);
+      contents = [];
+      for (var pi = 0; pi < data.pages.length; pi++) contents.push(renderPage(data, pi, data.pages.length));
+    }
+    var pageCount = contents.length;
     var total = 5 + pageCount * 2;
     var w = new Writer();
     var offsets = new Array(total + 1).fill(0);
@@ -527,7 +713,7 @@ window.GanttPDF = (function () {
     obj(5, '<< /Title (' + esc(title) + ') /Author (GanttFlow) /Creator (GanttFlow) /Producer (GanttFlow) /CreationDate (' + pdfDate + ') >>');
 
     for (i = 0; i < pageCount; i++) {
-      var content = renderPage(data, i, pageCount);
+      var content = contents[i];
       var pageNo = 6 + i * 2;
       var contentNo = 7 + i * 2;
       obj(pageNo, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + num(PAGE_W) + ' ' + num(PAGE_H) +
@@ -545,7 +731,8 @@ window.GanttPDF = (function () {
 
   function download(project) {
     var bytes = build(project);
-    var filename = slug(project && project.name) + '-gantt-' + todayISO() + '.pdf';
+    var kind = project && project.type === 'cycle' ? '-cycle-time-' : '-gantt-';
+    var filename = slug(project && project.name) + kind + todayISO() + '.pdf';
     var blob = new Blob([bytes], { type: 'application/pdf' });
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
