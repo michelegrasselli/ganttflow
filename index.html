@@ -84,6 +84,17 @@
       </div>
     </nav>
 
+    <section class="ctcalc" id="ctCalc" aria-label="Calcolo del tempo ciclo tra due attività" hidden>
+      <span class="cal-label" title="Differenza tra i secondi di fine di due attività della pagina">Calcolo tempo ciclo</span>
+      <span class="ctc-txt">dalla fine di</span>
+      <select class="cal-inp ctc-sel" id="calcFrom" aria-label="Prima attività: fine di riferimento"></select>
+      <span class="ctc-txt">alla fine di</span>
+      <select class="cal-inp ctc-sel" id="calcTo" aria-label="Seconda attività: fine di riferimento"></select>
+      <span class="ctc-eq" aria-hidden="true">=</span>
+      <output class="ctc-result" id="calcResult" aria-live="polite">—</output>
+      <span class="ctc-detail" id="calcDetail"></span>
+    </section>
+
     <section class="calpanel" id="calPanel" aria-label="Calendario personalizzato">
       <div class="cal-block">
         <span class="cal-label" title="Nasconde un intervallo dal diagramma: le date non occupano spazio. Le durate delle attività non cambiano.">Periodo nascosto</span>
@@ -111,7 +122,7 @@
       <span id="saveStatus">Salvataggio automatico attivo</span>
       <span class="legend"><i class="lg lg-we" aria-hidden="true"></i>Weekend<i class="lg lg-hol" aria-hidden="true"></i>Festivo</span>
       <span class="status-hint">Trascina i bordi delle intestazioni per ridimensionare le colonne · Spunte Sab/Dom/Fest: giorni inclusi nella durata.</span>
-      <span class="version">v1.5</span>
+      <span class="version">v1.6</span>
     </footer>
   </div>
 

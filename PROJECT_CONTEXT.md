@@ -118,6 +118,12 @@ reimportabile.
 - Interfaccia dell'app interamente in **italiano**; il PDF esportato è interamente in
   **inglese** (scelta esplicita per la condivisione del documento).
 
+### 2.5.1 Riordino attività
+- Maniglia (⋮⋮) visibile al passaggio sul bordo sinistro della riga: trascinando si
+  sposta l'attività sopra/sotto le altre (linea guida blu, scorrimento automatico ai
+  bordi). Da tastiera: `Alt` + `↑`/`↓` su un campo della riga. Vale per Gantt e tempo
+  ciclo; cambia solo l'ordine, non date, durate o collegamenti.
+
 ### 2.6 Stima tempo ciclo (tipo di lavoro alternativo)
 - **Nuovo** apre una scelta tra **Diagramma di Gantt** e **Stima tempo ciclo**; il lavoro
   corrente viene sostituito (avviso se contiene attività).
@@ -135,6 +141,10 @@ reimportabile.
   eliminando la pagina sorgente l'attività diventa normale con l'ultima durata.
 - Pannello calendario, weekend/festivi e pulsante Oggi non si applicano (il pulsante
   diventa **Inizio**, torna al secondo 0).
+- Attività **numerate progressivamente** per pagina (numero anche nei menu dei vincoli).
+- **Calcolo tempo ciclo tra due fini** (fascia in basso): `|fine_B − fine_A|` tra due
+  attività scelte; quota blu nel grafico; scelta salvata per pagina (`calcFrom`,
+  `calcTo`) e riportata nel PDF.
 - PDF in inglese con **tutte le pagine** in sequenza (`[sheet]` indica una pagina
   importata), file `<nome>-cycle-time-<data>.pdf`.
 
@@ -270,7 +280,10 @@ assets/favicon.svg  logo e favicon
 | Tempo ciclo misurato dal secondo 0 | Un ritardo iniziale fa parte del ciclo; coerente con il righello che parte da 0. |
 | Autosalvataggio locale | L'utente non deve perdere il lavoro chiudendo il browser. |
 
-## 6. Stato attuale (v1.5)
+## 6. Stato attuale (v1.6)
+
+Novità v1.6: riordino delle attività per trascinamento (Gantt e tempo ciclo), numerazione
+progressiva e calcolo del tempo ciclo tra le fini di due attività.
 
 Novità v1.5: scelta del tipo di lavoro con **Nuovo**; **stima tempo ciclo** in secondi
 con pagine, import di pagine come attività collegate, export JSON v4 e PDF multipagina.

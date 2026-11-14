@@ -147,6 +147,14 @@ bordo. Fai **doppio clic** sul bordo, oppure usa **Ripristina colonne** in basso
 destra, per tornare alle larghezze predefinite. La scelta viene ricordata nel browser
 e non modifica il file del progetto.
 
+### Riordinare le attività
+
+Passando con il mouse sul bordo sinistro di una riga compare una **maniglia** (⋮⋮):
+tienila premuta e trascina l'attività sopra o sotto le altre; una linea blu indica dove
+verrà inserita. In alternativa, con il cursore in un campo della riga, `Alt` + `↑`/`↓`
+la sposta di una posizione. L'ordine cambia solo la visualizzazione: date, durate e
+collegamenti restano invariati. Funziona sia nel Gantt sia nel tempo ciclo.
+
 ### Stima tempo ciclo
 
 Scegliendo **Nuovo → Stima tempo ciclo** si crea un grafico con la stessa grafica del
@@ -160,7 +168,14 @@ Gantt, ma con la scala in **secondi** (decimi ammessi, es. `2,5`):
   (`fine = fine collegata − offset`);
 - il **tempo ciclo** della pagina è il secondo in cui termina l'ultima attività: è
   indicato da una linea rossa tratteggiata con l'etichetta `TC`;
-- il righello mostra secondi principali e intermedi e si adatta ai 4 livelli di zoom.
+- il righello mostra secondi principali e intermedi e si adatta ai 4 livelli di zoom;
+- le attività di ogni pagina sono **numerate progressivamente** (1, 2, 3…); il numero
+  compare anche nei menu dei vincoli e si aggiorna quando riordini le righe.
+
+**Calcolo tempo ciclo tra due attività.** Nella fascia in basso scegli «dalla fine di»
+un'attività e «alla fine di» un'altra: il risultato è la differenza tra i loro secondi
+di fine (es. fine n. 1 = 8 s → fine n. 4 = 39 s → **31 s**). Nel grafico compare una
+quota blu tra le due fini. La scelta è salvata per ogni pagina e riportata nel PDF.
 
 **Pagine.** In basso, come in un foglio di calcolo, ci sono le linguette delle pagine:
 
@@ -279,6 +294,8 @@ Una **stima tempo ciclo** ha invece le pagine al posto dell'elenco `tasks`:
 ```
 
 - `start`, `end`, `duration` e `lag` sono secondi con al massimo un decimale.
+- `calcFrom` e `calcTo` (facoltativi, per pagina) sono gli id delle due attività usate
+  dal calcolo del tempo ciclo tra due fini; riferimenti non validi vengono azzerati.
 - `sourceSheetId` è `null` oppure l'id della pagina importata: in quel caso nome e
   durata vengono ricalcolati dalla pagina sorgente. Riferimenti mancanti o ciclici
   vengono rimossi in importazione.

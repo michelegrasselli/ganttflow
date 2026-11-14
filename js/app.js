@@ -36,7 +36,7 @@
     cycle: {
       min: [80, 40, 48, 48, 118, 36, 48],
       max: [640, 160, 200, 200, 420, 120, 120],
-      def: [164, 64, 70, 70, 168, 44, 60],
+      def: [194, 64, 70, 70, 168, 44, 60],
       key: 'ganttflow.layout.cycle.v1'
     }
   };
@@ -92,6 +92,7 @@
   var tlChip, tlChipText, chipRaf = 0;
   var hideStartEl, hideEndEl, hiddenChipsEl, customDateEl, customNameEl, customChipsEl;
   var sheetBarEl, sheetTabsEl, importSheetSel, typeModalEl, typeModalResolve = null;
+  var ctCalcEl, calcFromSel, calcToSel, calcResultEl, calcDetailEl;
 
   /* ============================================================
      UTILITÀ
@@ -632,7 +633,7 @@
      della pagina e durata pari al suo tempo ciclo, sempre aggiornati.
      ============================================================ */
   function makeSheet(name, list) {
-    return { id: uid(), name: name || 'Pagina 1', tasks: list || [] };
+    return { id: uid(), name: name || 'Pagina 1', tasks: list || [], calcFrom: null, calcTo: null };
   }
 
   function makeCycleProject(name, sheetList) {
@@ -766,6 +767,10 @@
         t.name = src.name;
       });
       recalcSheetTasks(s.tasks);
+      ['calcFrom', 'calcTo'].forEach(function (k) {
+        if (s[k] && !s.tasks.some(function (t) { return t.id === s[k]; })) s[k] = null;
+        if (!s[k]) s[k] = null;
+      });
       delete visiting[s.id];
       done[s.id] = true;
     }
@@ -791,7 +796,9 @@
       var sheet = {
         id: id,
         name: typeof src.name === 'string' && src.name.trim() ? src.name.trim().slice(0, 60) : 'Pagina ' + (si + 1),
-        tasks: []
+        tasks: [],
+        calcFrom: validId(src.calcFrom) ? src.calcFrom : null,
+        calcTo: validId(src.calcTo) ? src.calcTo : null
       };
       (Array.isArray(src.tasks) ? src.tasks : []).slice(0, MAX_TASKS).forEach(function (t, i) {
         if (!t || typeof t !== 'object') return;
@@ -1096,7 +1103,7 @@
     row.dataset.id = t.id;
     row.innerHTML =
       '<div class="fields">' +
-        '<div class="cell cell-name"><input class="inp inp-name" data-field="name" maxlength="120" aria-label="Nome attività" spellcheck="false" placeholder="Nome attività"></div>' +
+        '<div class="cell cell-name">' + DRAG_HANDLE + '<input class="inp inp-name" data-field="name" maxlength="120" aria-label="Nome attività" spellcheck="false" placeholder="Nome attività"></div>' +
         '<div class="cell cell-dur"><input class="inp inp-num" data-field="duration" type="number" min="1" max="' + MAX_DURATION + '" step="1" aria-label="Durata in giorni" title="Durata stimata in giorni"></div>' +
         '<div class="cell cell-start">' +
           '<input class="inp inp-date" data-field="start" type="date" aria-label="Data di inizio">' +
@@ -1152,7 +1159,9 @@
     return row;
   }
 
-  var LOCK_SVG = '<span class="lock" aria-hidden="true"><svg viewBox="0 0 16 16"><rect x="3.2" y="7" width="9.6" height="6.6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0V7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></span>';
+  var DRAG_HANDLE = '<button type="button" class="drag-handle" tabindex="-1" title="Trascina per spostare l’attività sopra o sotto le altre (oppure Alt+↑/↓ sul nome)" aria-hidden="true">' +
+    '<svg viewBox="0 0 8 14"><circle cx="2" cy="2.5" r="1.1"/><circle cx="6" cy="2.5" r="1.1"/><circle cx="2" cy="7" r="1.1"/><circle cx="6" cy="7" r="1.1"/><circle cx="2" cy="11.5" r="1.1"/><circle cx="6" cy="11.5" r="1.1"/></svg></button>';
+  var LOCK_SVG ='<span class="lock" aria-hidden="true"><svg viewBox="0 0 16 16"><rect x="3.2" y="7" width="9.6" height="6.6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0V7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></span>';
   var SHEET_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2.5 6.5h11M6.5 6.5v7" stroke="currentColor" stroke-width="1.3"/></svg>';
 
   function buildCycleRow(t) {
@@ -1160,7 +1169,8 @@
     row.dataset.id = t.id;
     row.innerHTML =
       '<div class="fields">' +
-        '<div class="cell cell-name">' +
+        '<div class="cell cell-name">' + DRAG_HANDLE +
+          '<span class="row-num" title="Numero progressivo dell’attività nella pagina">' + (indexById(t.id) + 1) + '</span>' +
           (t.sourceSheetId ? '<span class="sheet-badge" title="Pagina importata: nome e durata seguono la pagina sorgente">' + SHEET_SVG + '</span>' : '') +
           '<input class="inp inp-name" data-field="name" maxlength="120" aria-label="Nome attività" spellcheck="false" placeholder="Nome attività">' +
         '</div>' +
@@ -1274,9 +1284,15 @@
     tasks().forEach(function (p) {
       if (p.id === t.id) return;
       if (wouldCycle(t.id, p.id)) return;
-      select.appendChild(new Option(p.name || 'Senza nome', p.id));
+      select.appendChild(new Option(taskLabel(p), p.id));
     });
     select.value = t.predecessorId || '';
+  }
+
+  /* Etichetta di un'attività nei menu: nel tempo ciclo è preceduta dal numero. */
+  function taskLabel(t) {
+    var name = t.name || 'Senza nome';
+    return isCycle() ? (indexById(t.id) + 1) + ' · ' + name : name;
   }
 
   function updateOptionLabels() {
@@ -1286,9 +1302,140 @@
       Array.prototype.forEach.call(select.options, function (opt) {
         if (!opt.value) return;
         var t = taskById(opt.value);
-        if (t) opt.textContent = t.name || 'Senza nome';
+        if (t) opt.textContent = taskLabel(t);
       });
     });
+    renderCycleCalc();
+  }
+
+  /* ---------------- calcolo del tempo ciclo tra due fini ---------------- */
+  function calcPair(sheet) {
+    if (!sheet) return null;
+    var a = null, b = null;
+    sheet.tasks.forEach(function (t) {
+      if (t.id === sheet.calcFrom) a = t;
+      if (t.id === sheet.calcTo) b = t;
+    });
+    if (!a || !b) return { a: a, b: b, diff: null };
+    return { a: a, b: b, diff: round1(Math.abs(b.end - a.end)) };
+  }
+
+  function renderCycleCalc() {
+    if (!ctCalcEl) return;
+    if (!isCycle()) { ctCalcEl.hidden = true; return; }
+    ctCalcEl.hidden = false;
+    var sheet = activeSheet();
+    [[calcFromSel, 'calcFrom'], [calcToSel, 'calcTo']].forEach(function (pair) {
+      var sel = pair[0];
+      if (document.activeElement === sel) return;
+      sel.textContent = '';
+      sel.appendChild(new Option('— scegli —', ''));
+      (sheet ? sheet.tasks : []).forEach(function (t) {
+        sel.appendChild(new Option(taskLabel(t) + ' · fine ' + fmtSec(t.end), t.id));
+      });
+      sel.value = sheet && sheet[pair[1]] && taskById(sheet[pair[1]]) ? sheet[pair[1]] : '';
+      sel.disabled = !sheet || !sheet.tasks.length;
+    });
+    var res = calcPair(sheet);
+    calcResultEl.classList.toggle('empty', !res || res.diff === null);
+    if (!res || res.diff === null) {
+      calcResultEl.textContent = '—';
+      calcDetailEl.textContent = sheet && sheet.tasks.length >= 2
+        ? 'Scegli due attività: il risultato è la differenza tra i loro secondi di fine.'
+        : 'Servono almeno due attività nella pagina.';
+      return;
+    }
+    calcResultEl.textContent = fmtSec(res.diff);
+    calcDetailEl.textContent = 'fine n. ' + (indexById(res.a.id) + 1) + ' = ' + fmtSec(res.a.end) +
+      '  →  fine n. ' + (indexById(res.b.id) + 1) + ' = ' + fmtSec(res.b.end);
+  }
+
+  function onCalcChange(e) {
+    var sheet = activeSheet();
+    if (!sheet) return;
+    var key = e.target === calcFromSel ? 'calcFrom' : 'calcTo';
+    sheet[key] = e.target.value || null;
+    e.target.blur();
+    renderCycleCalc();
+    renderBars();
+    renderLinks();
+    saveSoon();
+  }
+
+  /* ---------------- riordino delle attività (trascinamento) ---------------- */
+  var rowDrag = null;
+
+  function moveTask(id, toIndex) {
+    var list = tasks();
+    var from = indexById(id);
+    if (from < 0) return false;
+    toIndex = Math.max(0, Math.min(list.length - 1, toIndex));
+    if (toIndex === from) return false;
+    var item = list.splice(from, 1)[0];
+    list.splice(toIndex, 0, item);
+    state.selectedId = id;
+    renderAll();
+    return true;
+  }
+
+  function onRowDragStart(e) {
+    var handle = e.target.closest ? e.target.closest('.drag-handle') : null;
+    if (!handle || e.button !== 0) return;
+    var row = handle.closest('.row.task');
+    if (!row) return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeColorPops(null);
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    var line = el('div', 'drop-line');
+    grid.appendChild(line);
+    rowDrag = { id: row.dataset.id, row: row, line: line, target: indexById(row.dataset.id), moved: false, startY: e.clientY };
+    row.classList.add('dragging');
+    document.body.classList.add('row-dragging');
+    selectTask(row.dataset.id);
+    updateRowDrag(e.clientY);
+  }
+
+  /* Calcola la posizione di inserimento in base al cursore e mostra la linea guida. */
+  function updateRowDrag(clientY) {
+    var rows = Array.prototype.slice.call(grid.querySelectorAll('.row.task'));
+    if (!rows.length) return;
+    var slot = rows.length;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i].getBoundingClientRect();
+      if (clientY < r.top + r.height / 2) { slot = i; break; }
+    }
+    var gridTop = grid.getBoundingClientRect().top;
+    var ref = slot < rows.length ? rows[slot].getBoundingClientRect().top : rows[rows.length - 1].getBoundingClientRect().bottom;
+    rowDrag.line.style.top = (ref - gridTop - 1) + 'px';
+    var from = indexById(rowDrag.id);
+    var target = slot > from ? slot - 1 : slot;
+    rowDrag.target = target;
+    rowDrag.line.classList.toggle('noop', target === from);
+  }
+
+  function onRowDragMove(e) {
+    if (!rowDrag) return;
+    e.preventDefault();
+    if (Math.abs(e.clientY - rowDrag.startY) > 3) rowDrag.moved = true;
+    var br = board.getBoundingClientRect();
+    var edge = 36;
+    if (e.clientY < br.top + edge + (headerRow ? headerRow.offsetHeight : 0)) board.scrollTop -= 12;
+    else if (e.clientY > br.bottom - edge) board.scrollTop += 12;
+    updateRowDrag(e.clientY);
+  }
+
+  function onRowDragEnd() {
+    if (!rowDrag) return;
+    var d = rowDrag;
+    rowDrag = null;
+    d.row.classList.remove('dragging');
+    d.line.remove();
+    document.body.classList.remove('row-dragging');
+    if (d.moved && moveTask(d.id, d.target)) {
+      var t = taskById(d.id);
+      toast('«' + (t && t.name ? t.name : 'Attività') + '» spostata in posizione ' + (d.target + 1) + '.');
+    }
   }
 
   function syncRows() {
@@ -1752,6 +1899,25 @@
       var cx = sc.cycleTime * px;
       out += '<line x1="' + cx + '" y1="0" x2="' + cx + '" y2="' + totalH + '" stroke="#ef4444" stroke-width="1.6" stroke-dasharray="4 3" opacity=".62"></line>';
     }
+    /* quota del calcolo tra due fini */
+    var calc = calcPair(activeSheet());
+    if (calc && calc.diff !== null) {
+      var xa = calc.a.end * px, xb = calc.b.end * px;
+      var ya = indexById(calc.a.id) * ROW_H + ROW_H / 2, yb = indexById(calc.b.id) * ROW_H + ROW_H / 2;
+      var yq = Math.max(ya, yb) + 17;
+      out += '<line x1="' + xa + '" y1="' + (ya - 13) + '" x2="' + xa + '" y2="' + (yq + 4) + '" stroke="#4f46e5" stroke-width="1.3" stroke-dasharray="3 2"></line>';
+      out += '<line x1="' + xb + '" y1="' + (yb - 13) + '" x2="' + xb + '" y2="' + (yq + 4) + '" stroke="#4f46e5" stroke-width="1.3" stroke-dasharray="3 2"></line>';
+      if (Math.abs(xb - xa) >= 2) {
+        var lo = Math.min(xa, xb), hi = Math.max(xa, xb);
+        out += '<line x1="' + lo + '" y1="' + yq + '" x2="' + hi + '" y2="' + yq + '" stroke="#4f46e5" stroke-width="1.4"></line>';
+        out += '<path d="M' + lo + ' ' + yq + ' l5 -3 v6 z M' + hi + ' ' + yq + ' l-5 -3 v6 z" fill="#4f46e5"></path>';
+      }
+      var lbl = fmtSec(calc.diff);
+      var lw = lbl.length * 6.2 + 10;
+      var lx = Math.max(xa, xb) + 6 + lw / 2;
+      out += '<rect x="' + (lx - lw / 2) + '" y="' + (yq - 6.5) + '" width="' + lw + '" height="13" rx="4" fill="#4f46e5"></rect>';
+      out += '<text x="' + lx + '" y="' + (yq + 3.3) + '" text-anchor="middle" font-size="9.5" font-weight="700" fill="#fff" font-family="Segoe UI, system-ui, sans-serif">' + escapeHtml(lbl) + '</text>';
+    }
     out += linkPaths(function (t) { return [t.start * px + 1, t.end * px]; });
     linksSvg.innerHTML = out;
   }
@@ -1929,6 +2095,7 @@
     updateMonthChip();
     renderCalendarPanel();
     renderSheetBar();
+    renderCycleCalc();
     board.scrollTop = st;
     board.scrollLeft = sl;
     if (opts.focusId) {
@@ -1950,6 +2117,7 @@
     updateStats();
     updateMonthChip();
     renderSheetBar();
+    renderCycleCalc();
     saveSoon();
   }
 
@@ -2383,6 +2551,8 @@
     });
     copyTasks.forEach(function (c) { if (c.predecessorId) c.predecessorId = idMap[c.predecessorId] || null; });
     var s = makeSheet(uniqueSheetName(src.name + ' (copia)'), copyTasks);
+    s.calcFrom = src.calcFrom ? idMap[src.calcFrom] || null : null;
+    s.calcTo = src.calcTo ? idMap[src.calcTo] || null : null;
     state.project.sheets.splice(sheets().indexOf(src) + 1, 0, s);
     selectSheet(s.id);
     toast('Pagina duplicata: «' + s.name + '».');
@@ -2925,14 +3095,32 @@
     grid.addEventListener('click', onGridClick);
     grid.addEventListener('dblclick', onGridDoubleClick);
     grid.addEventListener('mousedown', onColMouseDown);
+    grid.addEventListener('mousedown', onRowDragStart);
     document.addEventListener('mousemove', onColMouseMove);
+    document.addEventListener('mousemove', onRowDragMove);
     document.addEventListener('mouseup', onColMouseUp);
+    document.addEventListener('mouseup', onRowDragEnd);
     window.addEventListener('blur', onColMouseUp);
+    window.addEventListener('blur', onRowDragEnd);
+    calcFromSel.addEventListener('change', onCalcChange);
+    calcToSel.addEventListener('change', onCalcChange);
     grid.addEventListener('focusin', function (e) {
       var row = e.target.closest('.row.task');
       if (row) selectTask(row.dataset.id);
     });
     grid.addEventListener('keydown', function (e) {
+      if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        var kRow = e.target.closest('.row.task');
+        if (!kRow) return;
+        e.preventDefault();
+        var kId = kRow.dataset.id;
+        var field = e.target.dataset ? e.target.dataset.field : null;
+        if (moveTask(kId, indexById(kId) + (e.key === 'ArrowUp' ? -1 : 1))) {
+          var again = grid.querySelector('.row.task[data-id="' + kId + '"] [data-field="' + (field || 'name') + '"]');
+          if (again && !again.disabled) { try { again.focus({ preventScroll: false }); } catch (err) { again.focus(); } }
+        }
+        return;
+      }
       if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
         e.preventDefault();
         e.target.blur();
@@ -3097,6 +3285,11 @@
     sheetTabsEl = document.getElementById('sheetTabs');
     importSheetSel = document.getElementById('importSheetSel');
     typeModalEl = document.getElementById('typeModal');
+    ctCalcEl = document.getElementById('ctCalc');
+    calcFromSel = document.getElementById('calcFrom');
+    calcToSel = document.getElementById('calcTo');
+    calcResultEl = document.getElementById('calcResult');
+    calcDetailEl = document.getElementById('calcDetail');
 
     var stored = readStoredProject();
     state.project = stored || demoProject();

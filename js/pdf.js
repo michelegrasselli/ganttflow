@@ -545,9 +545,17 @@ window.GanttPDF = (function () {
     var pages = [];
     if (!list.length) pages.push([]);
     for (var i = 0; i < list.length; i += ROWS_PER_PAGE) pages.push(list.slice(i, i + ROWS_PER_PAGE));
+    var calc = null;
+    var ia = -1, ib = -1;
+    list.forEach(function (t, i) {
+      if (t.id === sheet.calcFrom) ia = i;
+      if (t.id === sheet.calcTo) ib = i;
+    });
+    if (ia >= 0 && ib >= 0) calc = { a: ia, b: ib, diff: r1(Math.abs(list[ib].end - list[ia].end)) };
     return {
       sheet: sheet,
       tasks: list,
+      calc: calc,
       cycleTime: ct,
       total: total,
       minor: minor,
@@ -574,6 +582,7 @@ window.GanttPDF = (function () {
     var meta = 'Cycle time estimate  ·  sheet "' + (data.sheet.name || 'Sheet') + '"  ·  ' +
       list.length + (list.length === 1 ? ' task' : ' tasks') +
       '  ·  cycle time ' + fmtS(data.cycleTime) + ' s' +
+      (data.calc ? '  ·  end #' + (data.calc.a + 1) + ' -> end #' + (data.calc.b + 1) + ': ' + fmtS(data.calc.diff) + ' s' : '') +
       '  ·  generated ' + fmtNum(todayISO());
     opsText(ops, M, 541, fit(meta, PAGE_W - M * 2, 8, false), 8, { color: MUTED });
     opsLine(ops, M, 530, PAGE_W - M, 530, 1, [0.88, 0.9, 0.94]);
