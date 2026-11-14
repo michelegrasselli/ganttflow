@@ -227,6 +227,20 @@
   function fmtTime(dt) {
     return pad2(dt.getHours()) + ':' + pad2(dt.getMinutes());
   }
+  /* Numero di settimana ISO 8601 (lunedì–domenica). */
+  function isoWeek(iso) {
+    var d = parseISO(iso);
+    if (!d) return { year: 0, week: 0 };
+    var t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    var shift = (t.getUTCDay() + 6) % 7;
+    t.setUTCDate(t.getUTCDate() - shift + 3);
+    var year = t.getUTCFullYear();
+    var jan4 = new Date(Date.UTC(year, 0, 4));
+    var jan4Shift = (jan4.getUTCDay() + 6) % 7;
+    var week1Thursday = new Date(Date.UTC(year, 0, 4 - jan4Shift + 3));
+    var week = 1 + Math.round((t.getTime() - week1Thursday.getTime()) / (7 * 86400000));
+    return { year: year, week: week };
+  }
   function clampInt(v, min, max, def) {
     var n = parseInt(v, 10);
     if (!Number.isFinite(n)) return def;
@@ -959,6 +973,30 @@
     headerSig = sig;
 
     headTimeline.textContent = '';
+
+    /* numeri di settimana ISO, compressi sui giorni visibili */
+    var weeks = el('div', 'weeks');
+    var vis = timeMap.visible;
+    var weekKeys = vis.map(function (iso) {
+      var w = isoWeek(iso);
+      return w.year + '-' + w.week;
+    });
+    var segStart = 0;
+    for (var wi = 1; wi <= vis.length; wi++) {
+      if (wi === vis.length || weekKeys[wi] !== weekKeys[segStart]) {
+        var wInfo = isoWeek(vis[segStart]);
+        var wCount = wi - segStart;
+        var weekEl = el('div', 'week');
+        weekEl.style.width = (wCount * px) + 'px';
+        if (wCount * px >= 25) weekEl.textContent = 'CW' + wInfo.week;
+        weekEl.title = 'Settimana ' + wInfo.week + ' del ' + wInfo.year + ' · ' +
+          wCount + (wCount === 1 ? ' giorno visibile' : ' giorni visibili');
+        weeks.appendChild(weekEl);
+        segStart = wi;
+      }
+    }
+    headTimeline.appendChild(weeks);
+
     var months = el('div', 'months');
     var cursor = range.start;
     while (cursor <= range.end) {

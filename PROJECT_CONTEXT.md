@@ -36,6 +36,8 @@ reimportabile.
 ### 2.2 Diagramma di Gantt (centro)
 - Asse temporale a calendario con mesi, giorni, numero del giorno e iniziale del
   giorno della settimana.
+- Fascia delle **settimane ISO 8601** (`CW44`, `CW45`, ...) sopra i mesi; le
+  etichette seguono solo i giorni visibili e si compattano con i periodi nascosti.
 - Barra colorata per ogni attività, estesa all'intervallo di calendario tra inizio e
   fine (quindi può attraversare giorni esclusi).
 - **Sabati e domeniche in arancione**, **festivi italiani e giorni rossi personalizzati
@@ -88,11 +90,16 @@ reimportabile.
   tratteggio lungo per `SS`, tratteggio corto per `FF`.
 
 ### 2.4 Esportazione
-- **PDF** A4 orizzontale, generato senza librerie: tabella attività (numero, nome,
-  giorni, inizio, fine, colonna **Vincolo** con tipo e numero dell'attività collegata)
-  e barre sul calendario con weekend arancioni, festivi (italiani e personalizzati)
-  rossi, legenda a piè di pagina, paginazione automatica, intestazione e numero di
-  pagina; nome file derivato dal nome del progetto.
+- **PDF** A4 orizzontale, generato senza librerie e **interamente in inglese**
+  (intestazioni, legenda, date, messaggi e nomi dei collegamenti): tabella attività
+  (numero, nome, giorni, inizio, fine, colonna **Link** con tipo e numero
+  dell'attività collegata) e barre sul calendario con weekend arancioni, festivi
+  (italiani e personalizzati) rossi, legenda a piè di pagina, paginazione automatica,
+  intestazione e numero di pagina; nome file derivato dal nome del progetto.
+- Sopra il calendario un **righello dei giorni** mostra per ogni giorno il numero e il
+  giorno abbreviato inglese (`Mon`, `Tue`, `Wed`, ...). Con colonne strette le
+  etichette sono ruotate di 90°; con intervalli molto lunghi si mostrano i lunedì e i
+  primi del mese.
 - Nel PDF i **periodi nascosti** vengono compattati come nella schermata, con
   indicazione del numero di giorni nascosti nell'intestazione e voce dedicata nella
   legenda.
@@ -108,7 +115,8 @@ reimportabile.
 - Aggiunta, duplicazione ed eliminazione attività (con annullamento).
 - Statistiche: numero attività, estensione calendario, giorni stimati totali,
   intervallo date, collegamenti attivi.
-- Interfaccia interamente in **italiano**.
+- Interfaccia dell'app interamente in **italiano**; il PDF esportato è interamente in
+  **inglese** (scelta esplicita per la condivisione del documento).
 
 ## 3. Modello dati
 
@@ -220,13 +228,16 @@ assets/favicon.svg  logo e favicon
 | Periodi nascosti solo visivi | L'utente vuole compattare chiusure e pause senza alterare le date reali del piano; il modello resta coerente e reversibile. |
 | Periodi nascosti normalizzati e fusi | Evita intervalli sovrapposti o invertiti, mantiene la mappa `prefix` monotona e il PDF stabile. |
 | Giorni rossi come festivi a tutti gli effetti | Riutilizza la regola esistente della spunta Fest: un solo comportamento da spiegare, coerente tra calcoli, UI e PDF. |
+| PDF interamente in inglese | Il documento è pensato per la condivisione con clienti/partner internazionali; l'interfaccia dell'app resta in italiano. |
+| Righello giorni del PDF con etichette ruotate sotto i 12 pt per giorno | Con 60–90 giorni in A4 orizzontale le etichette orizzontali si sovrapporrebbero; la rotazione mantiene numero e giorno leggibili ingrandendo il PDF. |
+| Settimane ISO 8601 | Standard internazionale, coerente con `CW` e con settimane che iniziano il lunedì. |
 | Larghezza colonne in `localStorage` | È una preferenza di vista personale, non un dato del progetto: non sporca il JSON né il lavoro condiviso. |
 | Colonne con limiti min/max | Evita colonne inutilizzabili o layout rotti ed è coerente con il ridimensionamento da tastiera/doppio clic. |
 | PDF scritto a mano | Nessuna libreria disponibile offline; output vettoriale e testo selezionabile. |
 | Formato progetto versionato | Consente evoluzioni future mantenendo la compatibilità. |
 | Autosalvataggio locale | L'utente non deve perdere il lavoro chiudendo il browser. |
 
-## 6. Stato attuale (v1.3)
+## 6. Stato attuale (v1.4)
 
 Implementato e verificato:
 - calcolo bidirezionale durata/inizio/fine sui **giorni considerati**;
@@ -234,16 +245,19 @@ Implementato e verificato:
   allineamento automatico di inizio/fine ai giorni considerati;
 - dipendenze a catena con tre tipi di vincolo (FS, SS, FF), offset 0–365 e
   prevenzione dei cicli;
-- rendering del Gantt con zoom, weekend arancioni, festivi italiani rossi, oggi,
-  connettori differenziati per tipo e palette colori preimpostata;
+- rendering del Gantt con zoom, **settimane ISO (CW)** sopra i mesi, weekend
+  arancioni, festivi italiani rossi, oggi, connettori differenziati per tipo e palette
+  colori preimpostata;
 - **colonne ridimensionabili** con limiti, ripristino (doppio clic o pulsante) e
   persistenza locale della larghezza;
 - **periodi nascosti** con compattazione della timeline e del PDF, pillole rimovibili
   e salvataggio nel progetto;
 - **giorni rossi personalizzati** con nome, pillole rimovibili, effetto su durate
   (spunta Fest), colorazione in app/PDF e salvataggio nel progetto;
-- export PDF multipagina con colonna Vincolo, legenda weekend/festivi/periodo nascosto
-  e conteggio dei giorni nascosti; export/import JSON v3 (v2 ancora importabile);
+- **export PDF interamente in inglese**, multipagina, con righello giorni
+  (numero + `Mon`/`Tue`/...), colonna Link, legenda weekend/holiday/hidden period e
+  conteggio dei giorni nascosti;
+- export/import JSON v3 (v2 ancora importabile);
 - salvataggio automatico, nuovo progetto, esempio, duplicazione (con copia delle spunte),
   eliminazione con undo;
 - layout responsive (breakpoint 1280/1100/980 px), pannello calendario senza overflow

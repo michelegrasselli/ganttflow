@@ -14,7 +14,7 @@ e funziona anche completamente offline.
 - **Colonne ridimensionabili**: trascina il bordo destro di un'intestazione per allargare o restringere la colonna; doppio clic (o **Ripristina colonne**) per tornare alle larghezze predefinite. La larghezza viene ricordata nel browser.
 - **Periodi nascosti**: nasconde un intervallo di date dal diagramma (e dal PDF) senza modificare le date o le durate delle attività.
 - **Giorni rossi personalizzati**: aggiunge manualmente date in rosso (chiusure, festività locali) che valgono come festivi per la spunta **Fest**.
-- **Diagramma di Gantt** a calendario con mesi e giorni; **sabati e domeniche in arancione**, **festivi italiani in rosso** (Natale, Pasqua, Ferragosto, ecc.) e linea di "oggi".
+- **Diagramma di Gantt** a calendario con mesi e giorni; **settimane ISO (CW)** sopra i mesi, **sabati e domeniche in arancione**, **festivi italiani in rosso** (Natale, Pasqua, Ferragosto, ecc.) e linea di "oggi".
 - **Colori preimpostati** per ogni attività, scelti da una palette e usati nella barra e nel PDF.
 - **Tre tipi di vincolo** tra attività, con offset in giorni e aggiornamento automatico a catena:
   - **Inizia dopo**: parte il giorno dopo la fine dell'attività collegata;
@@ -106,6 +106,13 @@ Repubblica, Santo Stefano) sono in **rosso**, con il nome nel tooltip. La colora
 indica il tipo di giorno; è la spunta **Sab**, **Dom** o **Fest** dell'attività a
 decidere se quel giorno conta nella durata. La legenda è riportata anche a piè di
 pagina nel PDF.
+
+### Settimane
+
+Sopra i mesi ogni settimana è etichettata con il numero ISO 8601: **CW44**, **CW45**,
+ecc. Il tooltip mostra l'anno e quanti giorni della settimana sono visibili. Quando un
+periodo è nascosto, anche le settimane si compattano e le etichette seguono i giorni
+effettivamente mostrati.
 
 ### Personalizzare il calendario
 
@@ -208,14 +215,18 @@ Il file esportato è JSON e può essere reimportato con il pulsante **Importa**:
 ## Note sul PDF
 
 Il PDF è generato interamente in JavaScript (`js/pdf.js`), senza librerie esterne.
-È un PDF vettoriale con testo selezionabile: contiene l'intestazione del progetto,
-la tabella delle attività (numero, nome, giorni, inizio, fine, colonna **Vincolo**
-con tipo e numero dell'attività collegata) e le barre sul calendario, con paginazione
-automatica quando le attività superano lo spazio disponibile (circa 30 righe per
-pagina, formato A4 orizzontale). Nel calendario i fine settimana sono evidenziati in
-arancione e i festivi (italiani e personalizzati) in rosso, con legenda a piè di
-pagina. I periodi nascosti vengono compattati anche nel PDF e indicati nella legenda;
-l'intestazione riporta quanti giorni sono stati nascosti.
+È un PDF vettoriale con testo selezionabile **interamente in inglese** (intestazioni,
+legenda, date e messaggi): contiene l'intestazione del progetto, la tabella delle
+attività (numero, nome, giorni, inizio, fine, colonna **Link** con tipo e numero
+dell'attività collegata) e le barre sul calendario. Sopra il calendario un righello
+mostra per ogni giorno il **numero** e il **giorno abbreviato** (Mon, Tue, Wed, ...),
+ruotato quando le colonne sono strette, così anche ingrandendo si capisce dove
+iniziano e finiscono le attività. I fine settimana sono evidenziati in arancione e i
+festivi (italiani e personalizzati) in rosso, con legenda a piè di pagina. I periodi
+nascosti vengono compattati anche nel PDF e indicati nella legenda; l'intestazione
+riporta quanti giorni sono stati nascosti. La paginazione è automatica quando le
+attività superano lo spazio disponibile (circa 29 righe per pagina, formato A4
+orizzontale).
 
 ## Struttura del progetto
 

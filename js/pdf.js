@@ -10,7 +10,7 @@ window.GanttPDF = (function () {
   var PAGE_H = 595.28;
   var M = 32;
   var ROW_H = 15;
-  var ROWS_TOP = 500;
+  var ROWS_TOP = 485;
   var ROWS_BOTTOM = 48;
   var ROWS_PER_PAGE = Math.floor((ROWS_TOP - ROWS_BOTTOM) / ROW_H);
   var COL = {
@@ -31,14 +31,15 @@ window.GanttPDF = (function () {
   var TODAY = [0.88, 0.11, 0.28];
   var WEEKEND_FILL = [0.996, 0.925, 0.875];
   var HOLIDAY_FILL = [0.988, 0.868, 0.868];
-  var LINK_LABEL = { FS: 'dopo', SS: 'con', FF: 'prima' };
+  var LINK_LABEL = { FS: 'after', SS: 'with', FF: 'before' };
   var FIXED_HOLIDAYS = {
     '01-01': 'Capodanno', '01-06': 'Epifania', '04-25': 'Liberazione', '05-01': 'Lavoratori',
     '06-02': 'Repubblica', '08-15': 'Ferragosto', '11-01': 'Ognissanti', '12-08': 'Immacolata',
     '12-25': 'Natale', '12-26': 'Santo Stefano'
   };
-  var MONTHS = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
-  var MONTHS_SHORT = ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
+  var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  var MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var WD_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   var DAY = 86400000;
 
   /* ----------------------------- date ----------------------------- */
@@ -76,15 +77,15 @@ window.GanttPDF = (function () {
   }
   function fmtLong(iso) {
     var d = parseISO(iso);
-    return d ? d.getUTCDate() + ' ' + MONTHS[d.getUTCMonth()] + ' ' + d.getUTCFullYear() : '—';
+    return d ? d.getUTCDate() + ' ' + MONTHS_SHORT[d.getUTCMonth()] + ' ' + d.getUTCFullYear() : '—';
   }
   function fmtNum(iso) {
     var d = parseISO(iso);
-    return d ? pad2(d.getUTCDate()) + '/' + pad2(d.getUTCMonth() + 1) + '/' + d.getUTCFullYear() : '—';
+    return d ? d.getUTCDate() + ' ' + MONTHS_SHORT[d.getUTCMonth()] + ' ' + d.getUTCFullYear() : '—';
   }
   function fmtNumShort(iso) {
     var d = parseISO(iso);
-    return d ? pad2(d.getUTCDate()) + '/' + pad2(d.getUTCMonth() + 1) + '/' + String(d.getUTCFullYear()).slice(2) : '—';
+    return d ? d.getUTCDate() + ' ' + MONTHS_SHORT[d.getUTCMonth()] + ' ' + String(d.getUTCFullYear()).slice(2) : '—';
   }
 
   /* ------------------------- festivi italiani ------------------------- */
@@ -120,7 +121,7 @@ window.GanttPDF = (function () {
     var list = project && Array.isArray(project.customHolidays) ? project.customHolidays : [];
     list.forEach(function (d) {
       if (d && parseISO(d.date)) {
-        map[d.date] = typeof d.name === 'string' && d.name.trim() ? d.name.trim() : 'Festivo personalizzato';
+        map[d.date] = typeof d.name === 'string' && d.name.trim() ? d.name.trim() : 'Custom holiday';
       }
     });
     return map;
@@ -158,9 +159,9 @@ window.GanttPDF = (function () {
     return false;
   }
   function slug(s) {
-    var out = String(s || 'progetto').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    var out = String(s || 'project').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase();
-    return out || 'progetto';
+    return out || 'project';
   }
 
   /* --------------------------- encoding --------------------------- */
@@ -233,6 +234,11 @@ window.GanttPDF = (function () {
     ops.push('BT /' + font + ' ' + num(size) + ' Tf ' + rgb(color) + ' rg ' +
       num(px) + ' ' + num(y) + ' Td (' + esc(text) + ') Tj ET');
   }
+  function opsTextRot(ops, x, y, str, size, color) {
+    var text = sanitize(str);
+    ops.push('BT /F1 ' + num(size) + ' Tf ' + rgb(color || INK) + ' rg 0 1 -1 0 ' +
+      num(x) + ' ' + num(y) + ' Tm (' + esc(text) + ') Tj ET');
+  }
   function opsRect(ops, x, y, w, h, color, stroke) {
     ops.push('q ' + rgb(color) + ' rg ' + num(x) + ' ' + num(y) + ' ' + num(w) + ' ' + num(h) + ' re f Q');
     if (stroke) {
@@ -253,7 +259,7 @@ window.GanttPDF = (function () {
         return {
           index: i,
           id: t.id,
-          name: t.name || 'Attività',
+          name: t.name || 'Task',
           start: t.start,
           end: t.end,
           duration: Math.max(1, parseInt(t.duration, 10) || diffDays(t.start, t.end) + 1),
@@ -323,6 +329,29 @@ window.GanttPDF = (function () {
     return visIndex(data, addDays(b, 1)) - visIndex(data, a);
   }
 
+  /* Righello dei giorni sopra il calendario: numero + giorno abbreviato.
+     Con colonne strette le etichette vengono ruotate di 90°. */
+  function drawDayRuler(ops, data, tlX, colW) {
+    var horizontal = colW >= 12;
+    var step = colW >= 3.1 ? 1 : 7;
+    var rotSize = Math.min(6, Math.max(2.8, colW * 0.95));
+    data.visibleDays.forEach(function (iso, i) {
+      var dd = parseISO(iso);
+      var wd = dd.getUTCDay();
+      if (step > 1 && wd !== 1 && dd.getUTCDate() !== 1) return;
+      var hol = !!holidayNameFor(iso, data.custom);
+      var color = hol ? [0.78, 0.15, 0.2]
+        : ((wd === 0 || wd === 6) ? [0.82, 0.47, 0.2] : [0.4, 0.45, 0.55]);
+      var cx = tlX + (i + 0.5) * colW;
+      if (horizontal) {
+        opsText(ops, cx, 505, String(dd.getUTCDate()), 5.6, { color: color, align: 'center', bold: true });
+        opsText(ops, cx, 496.5, WD_SHORT[wd], 4.6, { color: color, align: 'center' });
+      } else {
+        opsTextRot(ops, cx + rotSize * 0.34, 491, dd.getUTCDate() + ' ' + WD_SHORT[wd], rotSize, color);
+      }
+    });
+  }
+
   function renderPage(data, pageIndex, pageCount) {
     var ops = [];
     var rows = data.pages[pageIndex] || [];
@@ -338,24 +367,24 @@ window.GanttPDF = (function () {
     });
 
     /* intestazione */
-    opsText(ops, M, 556, fit(project.name || 'Progetto senza titolo', PAGE_W - M * 2 - 150, 18, true), 18, { bold: true });
+    opsText(ops, M, 558, fit(project.name || 'Untitled project', PAGE_W - M * 2 - 150, 18, true), 18, { bold: true });
     var firstVisible = data.visibleDays.length ? data.visibleDays[0] : data.start;
     var lastVisible = data.visibleDays.length ? data.visibleDays[data.visibleDays.length - 1] : data.end;
-    var meta = list.length + (list.length === 1 ? ' attività' : ' attività') +
+    var meta = list.length + (list.length === 1 ? ' task' : ' tasks') +
       '  ·  ' + fmtLong(firstVisible) + ' → ' + fmtLong(lastVisible) +
-      '  ·  ' + data.days + ' giorni' +
-      (data.hiddenCount ? '  ·  ' + data.hiddenCount + ' giorni nascosti' : '') +
-      (list.length ? '  ·  generato il ' + fmtNum(todayISO()) : '');
-    opsText(ops, M, 538, fit(meta, PAGE_W - M * 2, 8, false), 8, { color: MUTED });
-    opsLine(ops, M, 527, PAGE_W - M, 527, 1, [0.88, 0.9, 0.94]);
+      '  ·  ' + data.days + ' days' +
+      (data.hiddenCount ? '  ·  ' + data.hiddenCount + ' hidden days' : '') +
+      (list.length ? '  ·  generated ' + fmtNum(todayISO()) : '');
+    opsText(ops, M, 541, fit(meta, PAGE_W - M * 2, 8, false), 8, { color: MUTED });
+    opsLine(ops, M, 530, PAGE_W - M, 530, 1, [0.88, 0.9, 0.94]);
 
     /* intestazione tabella */
-    opsText(ops, COL.no, 512, '#', 6.5, { bold: true, color: MUTED });
-    opsText(ops, COL.name, 512, 'ATTIVITÀ', 6.5, { bold: true, color: MUTED });
-    opsText(ops, COL.durRight, 512, 'GG', 6.5, { bold: true, color: MUTED, align: 'right' });
-    opsText(ops, COL.start, 512, 'INIZIO', 6.5, { bold: true, color: MUTED });
-    opsText(ops, COL.end, 512, 'FINE', 6.5, { bold: true, color: MUTED });
-    opsText(ops, COL.after, 512, 'VINCOLO', 6.5, { bold: true, color: MUTED, align: 'right' });
+    opsText(ops, COL.no, 519, '#', 6.5, { bold: true, color: MUTED });
+    opsText(ops, COL.name, 519, 'ACTIVITY', 6.5, { bold: true, color: MUTED });
+    opsText(ops, COL.durRight, 519, 'DAYS', 6.5, { bold: true, color: MUTED, align: 'right' });
+    opsText(ops, COL.start, 519, 'START', 6.5, { bold: true, color: MUTED });
+    opsText(ops, COL.end, 519, 'END', 6.5, { bold: true, color: MUTED });
+    opsText(ops, COL.after, 519, 'LINK', 6.5, { bold: true, color: MUTED, align: 'right' });
 
     /* mesi (solo giorni visibili) */
     var monthSegments = [];
@@ -370,11 +399,12 @@ window.GanttPDF = (function () {
     });
     monthSegments.forEach(function (seg) {
       if (seg.w >= 26) {
-        opsText(ops, tlX + seg.x + 3, 512, monthNames[seg.m] + ' ' + String(seg.y).slice(2), 6.5, { bold: true, color: [0.28, 0.33, 0.42] });
+        opsText(ops, tlX + seg.x + 3, 519, monthNames[seg.m] + ' ' + String(seg.y).slice(2), 6.5, { bold: true, color: [0.28, 0.33, 0.42] });
       }
     });
-    opsLine(ops, M, 506, PAGE_W - M, 506, 1, [0.78, 0.82, 0.89]);
-    opsLine(ops, tlX - 10, 506, tlX - 10, ROWS_BOTTOM, 0.8, [0.88, 0.9, 0.94]);
+    drawDayRuler(ops, data, tlX, colW);
+    opsLine(ops, M, 489, PAGE_W - M, 489, 1, [0.78, 0.82, 0.89]);
+    opsLine(ops, tlX - 10, 489, tlX - 10, ROWS_BOTTOM, 0.8, [0.88, 0.9, 0.94]);
 
     /* weekend e festivi */
     for (var i = 0; i < data.visibleDays.length; i++) {
@@ -443,7 +473,7 @@ window.GanttPDF = (function () {
       opsText(ops, COL.start, cy - 2.4, fmtNumShort(t.start), 7);
       opsText(ops, COL.end, cy - 2.4, fmtNumShort(t.end), 7);
       var pi = t.predecessorId ? pos[t.predecessorId] : undefined;
-      if (pi !== undefined) opsText(ops, COL.after, cy - 2.4, (LINK_LABEL[t.link] || 'dopo') + ' #' + (pi + 1), 7, { color: MUTED, align: 'right' });
+      if (pi !== undefined) opsText(ops, COL.after, cy - 2.4, (LINK_LABEL[t.link] || 'after') + ' #' + (pi + 1), 7, { color: MUTED, align: 'right' });
 
       var x = xAt(data, t.start);
       var bw = Math.max(1.4, visibleSpan(data, t.start, t.end) * colW);
@@ -453,18 +483,18 @@ window.GanttPDF = (function () {
 
     /* piè di pagina */
     opsLine(ops, M, 36, PAGE_W - M, 36, 0.7, [0.9, 0.92, 0.95]);
-    opsText(ops, M, 23, fit('GanttFlow · ' + (project.name || 'Progetto'), 320, 7, false), 7, { color: MUTED });
+    opsText(ops, M, 23, fit('GanttFlow · ' + (project.name || 'Project'), 320, 7, false), 7, { color: MUTED });
     opsRect(ops, 372, 20, 7, 7, WEEKEND_FILL, [0.9, 0.78, 0.7]);
     opsText(ops, 383, 23, 'weekend', 6.5, { color: MUTED });
     opsRect(ops, 428, 20, 7, 7, HOLIDAY_FILL, [0.9, 0.72, 0.72]);
-    opsText(ops, 439, 23, 'festivo', 6.5, { color: MUTED });
+    opsText(ops, 439, 23, 'holiday', 6.5, { color: MUTED });
     if (data.hiddenCount) {
-      opsRect(ops, 496, 20, 7, 7, [0.94, 0.95, 0.97], [0.82, 0.85, 0.9]);
-      opsText(ops, 507, 23, 'periodo nascosto', 6.5, { color: MUTED });
+      opsRect(ops, 490, 20, 7, 7, [0.94, 0.95, 0.97], [0.82, 0.85, 0.9]);
+      opsText(ops, 501, 23, 'hidden period', 6.5, { color: MUTED });
     }
-    opsText(ops, PAGE_W - M, 23, 'Pagina ' + (pageIndex + 1) + ' di ' + pageCount, 7, { color: MUTED, align: 'right' });
+    opsText(ops, PAGE_W - M, 23, 'Page ' + (pageIndex + 1) + ' of ' + pageCount, 7, { color: MUTED, align: 'right' });
     if (!list.length) {
-      opsText(ops, PAGE_W / 2, 300, 'Nessuna attività nel progetto', 12, { color: MUTED, align: 'center' });
+      opsText(ops, PAGE_W / 2, 300, 'No activities in this project', 12, { color: MUTED, align: 'center' });
     }
     return ops.join('\n') + '\n';
   }
@@ -476,7 +506,7 @@ window.GanttPDF = (function () {
     var total = 5 + pageCount * 2;
     var w = new Writer();
     var offsets = new Array(total + 1).fill(0);
-    var title = (project && project.name) || 'Progetto';
+    var title = (project && project.name) || 'Project';
 
     function obj(n, body) {
       offsets[n] = w.length;
