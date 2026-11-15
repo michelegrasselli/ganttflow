@@ -1,0 +1,758 @@
+/* ============================================================
+   GanttFlow — generatore PDF (senza dipendenze esterne)
+   Produce un PDF A4 orizzontale con tabella attività e barre
+   su scala calendario. Scritto a mano: nessuna libreria.
+   ============================================================ */
+window.GanttPDF = (function () {
+  'use strict';
+
+  var PAGE_W = 841.89;
+  var PAGE_H = 595.28;
+  var M = 32;
+  var ROW_H = 15;
+  var ROWS_TOP = 485;
+  var ROWS_BOTTOM = 48;
+  var ROWS_PER_PAGE = Math.floor((ROWS_TOP - ROWS_BOTTOM) / ROW_H);
+  var COL = {
+    no: 32,
+    name: 54,
+    nameW: 176,
+    durRight: 258,
+    start: 282,
+    end: 340,
+    after: 406,
+    timeline: 424
+  };
+  var TL_W = PAGE_W - M - COL.timeline;
+  var INK = [0.06, 0.09, 0.16];
+  var MUTED = [0.35, 0.4, 0.5];
+  var FAINT = [0.82, 0.85, 0.9];
+  var ACCENT = [0.31, 0.27, 0.9];
+  var TODAY = [0.88, 0.11, 0.28];
+  var WEEKEND_FILL = [0.996, 0.925, 0.875];
+  var HOLIDAY_FILL = [0.988, 0.868, 0.868];
+  var LINK_LABEL = { FS: 'after', SS: 'with', FF: 'before' };
+  var FIXED_HOLIDAYS = {
+    '01-01': 'Capodanno', '01-06': 'Epifania', '04-25': 'Liberazione', '05-01': 'Lavoratori',
+    '06-02': 'Repubblica', '08-15': 'Ferragosto', '11-01': 'Ognissanti', '12-08': 'Immacolata',
+    '12-25': 'Natale', '12-26': 'Santo Stefano'
+  };
+  var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  var MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var WD_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  var DAY = 86400000;
+
+  /* ----------------------------- date ----------------------------- */
+  function parseISO(s) {
+    if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+    var y = +s.slice(0, 4), m = +s.slice(5, 7), d = +s.slice(8, 10);
+    var dt = new Date(Date.UTC(y, m - 1, d));
+    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+    return dt;
+  }
+  function pad2(n) { return String(n).padStart(2, '0'); }
+  function toISO(dt) { return dt.getUTCFullYear() + '-' + pad2(dt.getUTCMonth() + 1) + '-' + pad2(dt.getUTCDate()); }
+  function addDays(iso, n) {
+    var d = parseISO(iso);
+    if (!d) return iso;
+    d.setUTCDate(d.getUTCDate() + (n | 0));
+    return toISO(d);
+  }
+  function diffDays(a, b) {
+    var da = parseISO(a), db = parseISO(b);
+    if (!da || !db) return 0;
+    return Math.round((db.getTime() - da.getTime()) / DAY);
+  }
+  function startOfMonth(iso) {
+    var d = parseISO(iso);
+    return toISO(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)));
+  }
+  function endOfMonth(iso) {
+    var d = parseISO(iso);
+    return toISO(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)));
+  }
+  function todayISO() {
+    var n = new Date();
+    return toISO(new Date(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate())));
+  }
+  function fmtLong(iso) {
+    var d = parseISO(iso);
+    return d ? d.getUTCDate() + ' ' + MONTHS_SHORT[d.getUTCMonth()] + ' ' + d.getUTCFullYear() : '—';
+  }
+  function fmtNum(iso) {
+    var d = parseISO(iso);
+    return d ? d.getUTCDate() + ' ' + MONTHS_SHORT[d.getUTCMonth()] + ' ' + d.getUTCFullYear() : '—';
+  }
+  function fmtNumShort(iso) {
+    var d = parseISO(iso);
+    return d ? d.getUTCDate() + ' ' + MONTHS_SHORT[d.getUTCMonth()] + ' ' + String(d.getUTCFullYear()).slice(2) : '—';
+  }
+
+  /* ------------------------- festivi italiani ------------------------- */
+  var holidayCache = {};
+  function easterISO(year) {
+    var a = year % 19, b = Math.floor(year / 100), c = year % 100;
+    var d = Math.floor(b / 4), e = b % 4;
+    var f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+    var h = (19 * a + b - d - g + 15) % 30;
+    var i = Math.floor(c / 4), k = c % 4;
+    var l = (32 + 2 * e + 2 * i - h - k) % 7;
+    var m = Math.floor((a + 11 * h + 22 * l) / 451);
+    var month = Math.floor((h + l - 7 * m + 114) / 31);
+    var day = ((h + l - 7 * m + 114) % 31) + 1;
+    return toISO(new Date(Date.UTC(year, month - 1, day)));
+  }
+  function holidaysForYear(year) {
+    if (holidayCache[year]) return holidayCache[year];
+    var map = {};
+    Object.keys(FIXED_HOLIDAYS).forEach(function (md) { map[year + '-' + md] = FIXED_HOLIDAYS[md]; });
+    var easter = easterISO(year);
+    map[easter] = 'Pasqua';
+    map[addDays(easter, 1)] = 'Lunedi dell Angelo';
+    holidayCache[year] = map;
+    return map;
+  }
+  function holidayName(iso) {
+    if (!parseISO(iso)) return null;
+    return holidaysForYear(+iso.slice(0, 4))[iso] || null;
+  }
+  function customMap(project) {
+    var map = {};
+    var list = project && Array.isArray(project.customHolidays) ? project.customHolidays : [];
+    list.forEach(function (d) {
+      if (d && parseISO(d.date)) {
+        map[d.date] = typeof d.name === 'string' && d.name.trim() ? d.name.trim() : 'Custom holiday';
+      }
+    });
+    return map;
+  }
+  function holidayNameFor(iso, custom) {
+    return (custom && custom[iso]) || holidayName(iso);
+  }
+  function normalizeHiddenRanges(raw) {
+    var ranges = [];
+    (Array.isArray(raw) ? raw : []).forEach(function (r) {
+      var a = null, b = null;
+      if (typeof r === 'string') { a = b = r; }
+      else if (r && typeof r === 'object') { a = r.start; b = r.end || r.start; }
+      if (!parseISO(a) || !parseISO(b)) return;
+      if (a > b) { var tmp = a; a = b; b = tmp; }
+      ranges.push({ start: a, end: b });
+    });
+    ranges.sort(function (x, y) { return x.start < y.start ? -1 : (x.start > y.start ? 1 : 0); });
+    var out = [];
+    ranges.forEach(function (r) {
+      var last = out[out.length - 1];
+      if (last && diffDays(last.end, r.start) <= 1) {
+        if (r.end > last.end) last.end = r.end;
+      } else {
+        out.push({ start: r.start, end: r.end });
+      }
+    });
+    return out;
+  }
+  function isHiddenIn(iso, ranges) {
+    for (var i = 0; i < ranges.length; i++) {
+      if (iso < ranges[i].start) return false;
+      if (iso <= ranges[i].end) return true;
+    }
+    return false;
+  }
+  function slug(s) {
+    var out = String(s || 'project').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase();
+    return out || 'project';
+  }
+
+  /* --------------------------- encoding --------------------------- */
+  function toLatin1(str) {
+    var out = new Uint8Array(str.length);
+    for (var i = 0; i < str.length; i++) out[i] = str.charCodeAt(i) & 0xff;
+    return out;
+  }
+  function sanitize(str) {
+    var map = { '\u20AC': '\x80', '\u2013': '\x96', '\u2014': '\x97', '\u2018': '\x91', '\u2019': '\x92', '\u201C': '\x93', '\u201D': '\x94', '\u2026': '\x85' };
+    return String(str).normalize('NFC')
+      .replace(/\u2192/g, ' -> ')
+      .replace(/[\u2018\u2019\u201C\u201D\u2013\u2014\u20AC\u2026]/g, function (c) { return map[c]; })
+      .replace(/\r?\n/g, ' ').replace(/[\u0000-\u001F\u007F]/g, ' ')
+      .replace(/[^\x00-\xFF]/g, '?');
+  }
+  function esc(str) {
+    return sanitize(str).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  }
+  function num(n) {
+    return (Math.round(n * 1000) / 1000).toString();
+  }
+  function rgb(c) {
+    return num(c[0]) + ' ' + num(c[1]) + ' ' + num(c[2]);
+  }
+  function hexRgb(hex) {
+    var n = parseInt(String(hex).replace('#', ''), 16);
+    if (!Number.isFinite(n)) return [0.4, 0.4, 0.4];
+    return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
+  }
+  function estWidth(str, size, bold) {
+    return sanitize(str).length * size * (bold ? 0.545 : 0.515);
+  }
+  function fit(str, maxW, size, bold) {
+    var s = String(str);
+    if (estWidth(s, size, bold) <= maxW) return s;
+    while (s.length > 2 && estWidth(s + '...', size, bold) > maxW) s = s.slice(0, -1);
+    return s.replace(/\s+$/, '') + '...';
+  }
+
+  /* --------------------------- writer --------------------------- */
+  function Writer() {
+    this.parts = [];
+    this.length = 0;
+  }
+  Writer.prototype.raw = function (str) {
+    var b = toLatin1(str);
+    this.parts.push(b);
+    this.length += b.length;
+  };
+  Writer.prototype.toBytes = function () {
+    var out = new Uint8Array(this.length);
+    var off = 0;
+    for (var i = 0; i < this.parts.length; i++) {
+      out.set(this.parts[i], off);
+      off += this.parts[i].length;
+    }
+    return out;
+  };
+
+  /* --------------------------- contenuto pagina --------------------------- */
+  function opsText(ops, x, y, str, size, opts) {
+    opts = opts || {};
+    var font = opts.bold ? 'F2' : 'F1';
+    var color = opts.color || INK;
+    var text = sanitize(str);
+    var px = x;
+    if (opts.align === 'right') px = x - estWidth(text, size, opts.bold);
+    else if (opts.align === 'center') px = x - estWidth(text, size, opts.bold) / 2;
+    ops.push('BT /' + font + ' ' + num(size) + ' Tf ' + rgb(color) + ' rg ' +
+      num(px) + ' ' + num(y) + ' Td (' + esc(text) + ') Tj ET');
+  }
+  function opsTextRot(ops, x, y, str, size, color) {
+    var text = sanitize(str);
+    ops.push('BT /F1 ' + num(size) + ' Tf ' + rgb(color || INK) + ' rg 0 1 -1 0 ' +
+      num(x) + ' ' + num(y) + ' Tm (' + esc(text) + ') Tj ET');
+  }
+  function opsRect(ops, x, y, w, h, color, stroke) {
+    ops.push('q ' + rgb(color) + ' rg ' + num(x) + ' ' + num(y) + ' ' + num(w) + ' ' + num(h) + ' re f Q');
+    if (stroke) {
+      ops.push('q ' + rgb(stroke) + ' RG 0.5 w ' + num(x + 0.25) + ' ' + num(y + 0.25) + ' ' + num(w - 0.5) + ' ' + num(h - 0.5) + ' re S Q');
+    }
+  }
+  function opsLine(ops, x1, y1, x2, y2, width, color, dash) {
+    var s = 'q ' + rgb(color) + ' RG ' + num(width) + ' w ';
+    if (dash) s += '[' + dash + '] 0 d ';
+    s += num(x1) + ' ' + num(y1) + ' m ' + num(x2) + ' ' + num(y2) + ' l S Q';
+    ops.push(s);
+  }
+
+  function prepare(project) {
+    var list = (project && Array.isArray(project.tasks) ? project.tasks : [])
+      .filter(function (t) { return t && parseISO(t.start) && parseISO(t.end); })
+      .map(function (t, i) {
+        return {
+          index: i,
+          id: t.id,
+          name: t.name || 'Task',
+          start: t.start,
+          end: t.end,
+          duration: Math.max(1, parseInt(t.duration, 10) || diffDays(t.start, t.end) + 1),
+          color: /^#[0-9a-fA-F]{6}$/.test(t.color || '') ? t.color : '#6366f1',
+          predecessorId: t.predecessorId || null,
+          link: LINK_LABEL[t.link] ? t.link : 'FS'
+        };
+      });
+    var min = null, max = null;
+    list.forEach(function (t) {
+      if (!min || t.start < min) min = t.start;
+      if (!max || t.end > max) max = t.end;
+    });
+    if (!min) min = max = todayISO();
+    var start = startOfMonth(min);
+    var end = endOfMonth(max);
+    var allDays = diffDays(start, end) + 1;
+    var hidden = normalizeHiddenRanges(project && project.hiddenRanges);
+    var visibleDays = [];
+    var prefix = new Array(allDays + 1);
+    prefix[0] = 0;
+    for (var d = 0; d < allDays; d++) {
+      var iso = addDays(start, d);
+      if (!isHiddenIn(iso, hidden)) visibleDays.push(iso);
+      prefix[d + 1] = visibleDays.length;
+    }
+    var hiddenCount = allDays - visibleDays.length;
+    if (!visibleDays.length) {
+      visibleDays = [];
+      for (d = 0; d < allDays; d++) {
+        visibleDays.push(addDays(start, d));
+        prefix[d + 1] = d + 1;
+      }
+      hiddenCount = 0;
+    }
+    var days = visibleDays.length;
+    var pages = [];
+    if (!list.length) pages.push([]);
+    for (var i = 0; i < list.length; i += ROWS_PER_PAGE) pages.push(list.slice(i, i + ROWS_PER_PAGE));
+    return {
+      project: project || {},
+      tasks: list,
+      start: start,
+      end: end,
+      allDays: allDays,
+      days: days,
+      hiddenCount: hiddenCount,
+      visibleDays: visibleDays,
+      prefix: prefix,
+      custom: customMap(project),
+      colW: TL_W / Math.max(1, days),
+      pages: pages
+    };
+  }
+
+  function visIndex(data, iso) {
+    var d = diffDays(data.start, iso);
+    if (d < 0) d = 0;
+    if (d > data.allDays) d = data.allDays;
+    return data.prefix[d];
+  }
+  function xAt(data, iso) {
+    return COL.timeline + visIndex(data, iso) * data.colW;
+  }
+  function visibleSpan(data, a, b) {
+    if (diffDays(a, b) < 0) return 0;
+    return visIndex(data, addDays(b, 1)) - visIndex(data, a);
+  }
+
+  /* Righello dei giorni sopra il calendario: numero + giorno abbreviato.
+     Con colonne strette le etichette vengono ruotate di 90°. */
+  function drawDayRuler(ops, data, tlX, colW) {
+    var horizontal = colW >= 12;
+    var step = colW >= 3.1 ? 1 : 7;
+    var rotSize = Math.min(6, Math.max(2.8, colW * 0.95));
+    data.visibleDays.forEach(function (iso, i) {
+      var dd = parseISO(iso);
+      var wd = dd.getUTCDay();
+      if (step > 1 && wd !== 1 && dd.getUTCDate() !== 1) return;
+      var hol = !!holidayNameFor(iso, data.custom);
+      var color = hol ? [0.78, 0.15, 0.2]
+        : ((wd === 0 || wd === 6) ? [0.82, 0.47, 0.2] : [0.4, 0.45, 0.55]);
+      var cx = tlX + (i + 0.5) * colW;
+      if (horizontal) {
+        opsText(ops, cx, 505, String(dd.getUTCDate()), 5.6, { color: color, align: 'center', bold: true });
+        opsText(ops, cx, 496.5, WD_SHORT[wd], 4.6, { color: color, align: 'center' });
+      } else {
+        opsTextRot(ops, cx + rotSize * 0.34, 491, dd.getUTCDate() + ' ' + WD_SHORT[wd], rotSize, color);
+      }
+    });
+  }
+
+  function renderPage(data, pageIndex, pageCount) {
+    var ops = [];
+    var rows = data.pages[pageIndex] || [];
+    var project = data.project || {};
+    var list = data.tasks;
+    var colW = data.colW;
+    var tlX = COL.timeline;
+    var monthNames = MONTHS_SHORT;
+
+    /* sfondo zebrato */
+    rows.forEach(function (t, i) {
+      if (i % 2 === 1) opsRect(ops, M, ROWS_TOP - (i + 1) * ROW_H, PAGE_W - M * 2, ROW_H, [0.965, 0.972, 0.988]);
+    });
+
+    /* intestazione */
+    opsText(ops, M, 558, fit(project.name || 'Untitled project', PAGE_W - M * 2 - 150, 18, true), 18, { bold: true });
+    var firstVisible = data.visibleDays.length ? data.visibleDays[0] : data.start;
+    var lastVisible = data.visibleDays.length ? data.visibleDays[data.visibleDays.length - 1] : data.end;
+    var meta = list.length + (list.length === 1 ? ' task' : ' tasks') +
+      '  ·  ' + fmtLong(firstVisible) + ' → ' + fmtLong(lastVisible) +
+      '  ·  ' + data.days + ' days' +
+      (data.hiddenCount ? '  ·  ' + data.hiddenCount + ' hidden days' : '') +
+      (list.length ? '  ·  generated ' + fmtNum(todayISO()) : '');
+    opsText(ops, M, 541, fit(meta, PAGE_W - M * 2, 8, false), 8, { color: MUTED });
+    opsLine(ops, M, 530, PAGE_W - M, 530, 1, [0.88, 0.9, 0.94]);
+
+    /* intestazione tabella */
+    opsText(ops, COL.no, 519, '#', 6.5, { bold: true, color: MUTED });
+    opsText(ops, COL.name, 519, 'ACTIVITY', 6.5, { bold: true, color: MUTED });
+    opsText(ops, COL.durRight, 519, 'DAYS', 6.5, { bold: true, color: MUTED, align: 'right' });
+    opsText(ops, COL.start, 519, 'START', 6.5, { bold: true, color: MUTED });
+    opsText(ops, COL.end, 519, 'END', 6.5, { bold: true, color: MUTED });
+    opsText(ops, COL.after, 519, 'LINK', 6.5, { bold: true, color: MUTED, align: 'right' });
+
+    /* mesi (solo giorni visibili) */
+    var monthSegments = [];
+    var lastSeg = null;
+    data.visibleDays.forEach(function (iso, idx) {
+      var dd = parseISO(iso);
+      if (!lastSeg || lastSeg.m !== dd.getUTCMonth() || lastSeg.y !== dd.getUTCFullYear()) {
+        lastSeg = { x: idx * colW, w: 0, m: dd.getUTCMonth(), y: dd.getUTCFullYear() };
+        monthSegments.push(lastSeg);
+      }
+      lastSeg.w += colW;
+    });
+    monthSegments.forEach(function (seg) {
+      if (seg.w >= 26) {
+        opsText(ops, tlX + seg.x + 3, 519, monthNames[seg.m] + ' ' + String(seg.y).slice(2), 6.5, { bold: true, color: [0.28, 0.33, 0.42] });
+      }
+    });
+    drawDayRuler(ops, data, tlX, colW);
+    opsLine(ops, M, 489, PAGE_W - M, 489, 1, [0.78, 0.82, 0.89]);
+    opsLine(ops, tlX - 10, 489, tlX - 10, ROWS_BOTTOM, 0.8, [0.88, 0.9, 0.94]);
+
+    /* weekend e festivi */
+    for (var i = 0; i < data.visibleDays.length; i++) {
+      var iso = data.visibleDays[i];
+      var wd = parseISO(iso).getUTCDay();
+      var hol = holidayNameFor(iso, data.custom);
+      if (!hol && wd !== 0 && wd !== 6) continue;
+      var w = Math.max(0.9, colW);
+      opsRect(ops, tlX + i * colW, ROWS_BOTTOM, w, ROWS_TOP - ROWS_BOTTOM, hol ? HOLIDAY_FILL : WEEKEND_FILL);
+    }
+
+    /* linee mesi */
+    monthSegments.forEach(function (seg, i) {
+      if (i === 0) return;
+      opsLine(ops, tlX + seg.x, ROWS_BOTTOM, tlX + seg.x, ROWS_TOP, 0.6, [0.9, 0.92, 0.95]);
+    });
+
+    /* oggi */
+    var ti = data.visibleDays.indexOf(todayISO());
+    if (ti >= 0) {
+      opsLine(ops, tlX + (ti + 0.5) * colW, ROWS_BOTTOM, tlX + (ti + 0.5) * colW, ROWS_TOP, 1, TODAY, '2 2');
+    }
+
+    /* collegamenti */
+    var pos = {};
+    list.forEach(function (t, i) { pos[t.id] = i; });
+    var pageStart = pageIndex * ROWS_PER_PAGE;
+    rows.forEach(function (t, i) {
+      if (!t.predecessorId) return;
+      var pi = pos[t.predecessorId];
+      if (pi === undefined) return;
+      if (pi < pageStart || pi >= pageStart + rows.length) return;
+      var pred = list[pi];
+      var pStartX = xAt(data, pred.start);
+      var pEndX = xAt(data, addDays(pred.end, 1));
+      var tStartX = xAt(data, t.start);
+      var tEndX = xAt(data, addDays(t.end, 1));
+      var x1 = t.link === 'SS' ? pStartX : pEndX;
+      var x2 = t.link === 'FF' ? tEndX : tStartX;
+      var y1 = ROWS_TOP - (pi - pageStart + 0.5) * ROW_H;
+      var y2 = ROWS_TOP - (i + 0.5) * ROW_H;
+      var dash = t.link === 'SS' ? '[2 1.5] 0 d ' : (t.link === 'FF' ? '[1 1.5] 0 d ' : '');
+      var mid, path;
+      if (x2 - x1 >= 4) {
+        mid = x1 + Math.min(8, (x2 - x1) / 2);
+        path = num(x1) + ' ' + num(y1) + ' m ' + num(mid) + ' ' + num(y1) + ' l ' +
+          num(mid) + ' ' + num(y2) + ' l ' + num(x2 - 2) + ' ' + num(y2) + ' l';
+      } else {
+        mid = Math.max(tlX + 1, Math.min(x1, x2) - 6);
+        path = num(x1) + ' ' + num(y1) + ' m ' + num(mid) + ' ' + num(y1) + ' l ' +
+          num(mid) + ' ' + num(y2) + ' l ' + num(x2 - 2) + ' ' + num(y2) + ' l';
+      }
+      ops.push('q 0.45 0.5 0.6 RG 0.7 w ' + dash + path + ' S Q');
+      ops.push('q 0.45 0.5 0.6 rg ' + num(x2) + ' ' + num(y2) + ' m ' + num(x2 - 4) + ' ' + num(y2 + 1.8) + ' l ' +
+        num(x2 - 4) + ' ' + num(y2 - 1.8) + ' l f Q');
+    });
+
+    /* righe */
+    rows.forEach(function (t, i) {
+      var top = ROWS_TOP - (i + 1) * ROW_H;
+      var cy = top + ROW_H / 2;
+      var idx = pageStart + i + 1;
+      opsText(ops, COL.no, cy - 2.2, String(idx), 6.5, { color: [0.6, 0.66, 0.75] });
+      opsText(ops, COL.name, cy - 2.4, fit(t.name, COL.nameW, 7.5, false), 7.5, { bold: false });
+      opsText(ops, COL.durRight, cy - 2.4, String(t.duration), 7.5, { align: 'right' });
+      opsText(ops, COL.start, cy - 2.4, fmtNumShort(t.start), 7);
+      opsText(ops, COL.end, cy - 2.4, fmtNumShort(t.end), 7);
+      var pi = t.predecessorId ? pos[t.predecessorId] : undefined;
+      if (pi !== undefined) opsText(ops, COL.after, cy - 2.4, (LINK_LABEL[t.link] || 'after') + ' #' + (pi + 1), 7, { color: MUTED, align: 'right' });
+
+      var x = xAt(data, t.start);
+      var bw = Math.max(1.4, visibleSpan(data, t.start, t.end) * colW);
+      var c = hexRgb(t.color);
+      opsRect(ops, x, cy - 4.5, bw, 9, c, [Math.max(0, c[0] - .18), Math.max(0, c[1] - .18), Math.max(0, c[2] - .18)]);
+    });
+
+    /* piè di pagina */
+    opsLine(ops, M, 36, PAGE_W - M, 36, 0.7, [0.9, 0.92, 0.95]);
+    opsText(ops, M, 23, fit('GanttFlow · ' + (project.name || 'Project'), 320, 7, false), 7, { color: MUTED });
+    opsRect(ops, 372, 20, 7, 7, WEEKEND_FILL, [0.9, 0.78, 0.7]);
+    opsText(ops, 383, 23, 'weekend', 6.5, { color: MUTED });
+    opsRect(ops, 428, 20, 7, 7, HOLIDAY_FILL, [0.9, 0.72, 0.72]);
+    opsText(ops, 439, 23, 'holiday', 6.5, { color: MUTED });
+    if (data.hiddenCount) {
+      opsRect(ops, 490, 20, 7, 7, [0.94, 0.95, 0.97], [0.82, 0.85, 0.9]);
+      opsText(ops, 501, 23, 'hidden period', 6.5, { color: MUTED });
+    }
+    opsText(ops, PAGE_W - M, 23, 'Page ' + (pageIndex + 1) + ' of ' + pageCount, 7, { color: MUTED, align: 'right' });
+    if (!list.length) {
+      opsText(ops, PAGE_W / 2, 300, 'No activities in this project', 12, { color: MUTED, align: 'center' });
+    }
+    return ops.join('\n') + '\n';
+  }
+
+  /* ===================== stima tempo ciclo (secondi) ===================== */
+  var STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200];
+  var CT_COLOR = [0.88, 0.2, 0.2];
+  function r1(v) { return Math.round((+v || 0) * 10) / 10; }
+  function fmtS(v) { return String(r1(v)); }
+  function pickStep(minPt, scale, multipleOf) {
+    for (var i = 0; i < STEPS.length; i++) {
+      var s = STEPS[i];
+      if (multipleOf) {
+        var r = s / multipleOf;
+        if (r < 2 || Math.abs(r - Math.round(r)) > 1e-6) continue;
+      }
+      if (s * scale >= minPt) return s;
+    }
+    return STEPS[STEPS.length - 1];
+  }
+
+  function prepareCycleSheet(sheet, allSheets) {
+    var names = {};
+    allSheets.forEach(function (s) { names[s.id] = s.name; });
+    var list = (Array.isArray(sheet.tasks) ? sheet.tasks : []).map(function (t, i) {
+      return {
+        index: i,
+        id: t.id,
+        name: t.name || 'Task',
+        start: r1(t.start),
+        end: r1(t.end),
+        duration: r1(t.duration),
+        color: /^#[0-9a-fA-F]{6}$/.test(t.color || '') ? t.color : '#6366f1',
+        predecessorId: t.predecessorId || null,
+        link: LINK_LABEL[t.link] ? t.link : 'FS',
+        sheet: t.sourceSheetId && names[t.sourceSheetId] ? names[t.sourceSheetId] : null
+      };
+    });
+    var ct = 0;
+    list.forEach(function (t) { if (t.end > ct) ct = t.end; });
+    ct = r1(ct);
+    var roughTotal = Math.max(ct * 1.05, 1);
+    var scale0 = TL_W / roughTotal;
+    var minor = pickStep(9, scale0);
+    var major = pickStep(42, scale0, minor);
+    var nMajor = Math.max(1, Math.ceil(roughTotal / major - 1e-9));
+    var total = nMajor * major;
+    var pages = [];
+    if (!list.length) pages.push([]);
+    for (var i = 0; i < list.length; i += ROWS_PER_PAGE) pages.push(list.slice(i, i + ROWS_PER_PAGE));
+    var calc = null;
+    var ia = -1, ib = -1;
+    list.forEach(function (t, i) {
+      if (t.id === sheet.calcFrom) ia = i;
+      if (t.id === sheet.calcTo) ib = i;
+    });
+    if (ia >= 0 && ib >= 0) calc = { a: ia, b: ib, diff: r1(Math.abs(list[ib].end - list[ia].end)) };
+    return {
+      sheet: sheet,
+      tasks: list,
+      calc: calc,
+      cycleTime: ct,
+      total: total,
+      minor: minor,
+      major: major,
+      scale: TL_W / total,
+      pages: pages
+    };
+  }
+
+  function renderCyclePage(project, data, pageIndex, pageNo, pageCount) {
+    var ops = [];
+    var rows = data.pages[pageIndex] || [];
+    var list = data.tasks;
+    var tlX = COL.timeline;
+    var sc = data.scale;
+    function xs(v) { return tlX + v * sc; }
+
+    rows.forEach(function (t, i) {
+      if (i % 2 === 1) opsRect(ops, M, ROWS_TOP - (i + 1) * ROW_H, PAGE_W - M * 2, ROW_H, [0.965, 0.972, 0.988]);
+    });
+
+    /* intestazione */
+    opsText(ops, M, 558, fit(project.name || 'Untitled cycle time estimate', PAGE_W - M * 2 - 150, 18, true), 18, { bold: true });
+    var meta = 'Cycle time estimate  ·  sheet "' + (data.sheet.name || 'Sheet') + '"  ·  ' +
+      list.length + (list.length === 1 ? ' task' : ' tasks') +
+      '  ·  cycle time ' + fmtS(data.cycleTime) + ' s' +
+      (data.calc ? '  ·  end #' + (data.calc.a + 1) + ' -> end #' + (data.calc.b + 1) + ': ' + fmtS(data.calc.diff) + ' s' : '') +
+      '  ·  generated ' + fmtNum(todayISO());
+    opsText(ops, M, 541, fit(meta, PAGE_W - M * 2, 8, false), 8, { color: MUTED });
+    opsLine(ops, M, 530, PAGE_W - M, 530, 1, [0.88, 0.9, 0.94]);
+
+    opsText(ops, COL.no, 519, '#', 6.5, { bold: true, color: MUTED });
+    opsText(ops, COL.name, 519, 'ACTIVITY', 6.5, { bold: true, color: MUTED });
+    opsText(ops, COL.durRight, 519, 'SEC', 6.5, { bold: true, color: MUTED, align: 'right' });
+    opsText(ops, COL.start, 519, 'START', 6.5, { bold: true, color: MUTED });
+    opsText(ops, COL.end, 519, 'END', 6.5, { bold: true, color: MUTED });
+    opsText(ops, COL.after, 519, 'LINK', 6.5, { bold: true, color: MUTED, align: 'right' });
+
+    /* righello dei secondi */
+    var nMinor = Math.round(data.total / data.minor);
+    var ratio = Math.round(data.major / data.minor);
+    for (var k = 0; k <= nMinor; k++) {
+      var v = r1(k * data.minor);
+      var x = xs(v);
+      var isMajor = k % ratio === 0;
+      if (isMajor) {
+        if (k < nMinor) opsText(ops, x + 1.5, 519, fmtS(v) + ' s', 6.5, { bold: true, color: [0.28, 0.33, 0.42] });
+        opsLine(ops, x, ROWS_BOTTOM, x, 512, 0.6, [0.8, 0.84, 0.9]);
+      } else {
+        opsLine(ops, x, ROWS_BOTTOM, x, ROWS_TOP, 0.3, [0.92, 0.93, 0.96]);
+        opsLine(ops, x, 489, x, 493, 0.4, [0.7, 0.74, 0.8]);
+        if (data.minor * sc >= 14) opsText(ops, x, 496, fmtS(v), 5, { color: [0.45, 0.5, 0.6], align: 'center' });
+      }
+    }
+    opsLine(ops, M, 489, PAGE_W - M, 489, 1, [0.78, 0.82, 0.89]);
+    opsLine(ops, tlX - 10, 489, tlX - 10, ROWS_BOTTOM, 0.8, [0.88, 0.9, 0.94]);
+
+    /* linea del tempo ciclo */
+    if (data.cycleTime > 0) {
+      var cx = xs(data.cycleTime);
+      opsLine(ops, cx, ROWS_BOTTOM, cx, ROWS_TOP, 1, CT_COLOR, '2 2');
+      var label = 'CT ' + fmtS(data.cycleTime) + ' s';
+      var lw = estWidth(label, 6, true) + 6;
+      var lx = Math.min(cx - lw / 2, PAGE_W - M - lw);
+      opsRect(ops, lx, 497, lw, 9, CT_COLOR);
+      opsText(ops, lx + 3, 499.6, label, 6, { bold: true, color: [1, 1, 1] });
+    }
+
+    /* collegamenti */
+    var pos = {};
+    list.forEach(function (t, i) { pos[t.id] = i; });
+    var pageStart = pageIndex * ROWS_PER_PAGE;
+    rows.forEach(function (t, i) {
+      if (!t.predecessorId) return;
+      var pi = pos[t.predecessorId];
+      if (pi === undefined || pi < pageStart || pi >= pageStart + rows.length) return;
+      var pred = list[pi];
+      var x1 = t.link === 'SS' ? xs(pred.start) : xs(pred.end);
+      var x2 = t.link === 'FF' ? xs(t.end) : xs(t.start);
+      var y1 = ROWS_TOP - (pi - pageStart + 0.5) * ROW_H;
+      var y2 = ROWS_TOP - (i + 0.5) * ROW_H;
+      var dash = t.link === 'SS' ? '[2 1.5] 0 d ' : (t.link === 'FF' ? '[1 1.5] 0 d ' : '');
+      var mid = x2 - x1 >= 4 ? x1 + Math.min(8, (x2 - x1) / 2) : Math.max(tlX + 1, Math.min(x1, x2) - 6);
+      var path = num(x1) + ' ' + num(y1) + ' m ' + num(mid) + ' ' + num(y1) + ' l ' +
+        num(mid) + ' ' + num(y2) + ' l ' + num(x2 - 2) + ' ' + num(y2) + ' l';
+      ops.push('q 0.45 0.5 0.6 RG 0.7 w ' + dash + path + ' S Q');
+      ops.push('q 0.45 0.5 0.6 rg ' + num(x2) + ' ' + num(y2) + ' m ' + num(x2 - 4) + ' ' + num(y2 + 1.8) + ' l ' +
+        num(x2 - 4) + ' ' + num(y2 - 1.8) + ' l f Q');
+    });
+
+    /* righe */
+    rows.forEach(function (t, i) {
+      var top = ROWS_TOP - (i + 1) * ROW_H;
+      var cy = top + ROW_H / 2;
+      opsText(ops, COL.no, cy - 2.2, String(pageStart + i + 1), 6.5, { color: [0.6, 0.66, 0.75] });
+      opsText(ops, COL.name, cy - 2.4, fit((t.sheet ? '[sheet] ' : '') + t.name, COL.nameW, 7.5, false), 7.5, { bold: !!t.sheet });
+      opsText(ops, COL.durRight, cy - 2.4, fmtS(t.duration), 7.5, { align: 'right' });
+      opsText(ops, COL.start, cy - 2.4, fmtS(t.start) + ' s', 7);
+      opsText(ops, COL.end, cy - 2.4, fmtS(t.end) + ' s', 7);
+      var pi = t.predecessorId ? pos[t.predecessorId] : undefined;
+      if (pi !== undefined) opsText(ops, COL.after, cy - 2.4, (LINK_LABEL[t.link] || 'after') + ' #' + (pi + 1), 7, { color: MUTED, align: 'right' });
+      var x = xs(t.start);
+      var bw = Math.max(1.4, t.duration * sc);
+      var c = hexRgb(t.color);
+      opsRect(ops, x, cy - 4.5, bw, 9, c, [Math.max(0, c[0] - .18), Math.max(0, c[1] - .18), Math.max(0, c[2] - .18)]);
+    });
+
+    /* piè di pagina */
+    opsLine(ops, M, 36, PAGE_W - M, 36, 0.7, [0.9, 0.92, 0.95]);
+    opsText(ops, M, 23, fit('GanttFlow · ' + (project.name || 'Project') + ' · ' + (data.sheet.name || 'Sheet'), 320, 7, false), 7, { color: MUTED });
+    opsLine(ops, 372, 23.5, 384, 23.5, 1, CT_COLOR, '2 2');
+    opsText(ops, 388, 21.5, 'cycle time', 6.5, { color: MUTED });
+    opsText(ops, 436, 21.5, '[sheet] = imported sheet (duration = its cycle time)', 6.5, { color: MUTED });
+    opsText(ops, PAGE_W - M, 23, 'Page ' + pageNo + ' of ' + pageCount, 7, { color: MUTED, align: 'right' });
+    if (!list.length) opsText(ops, PAGE_W / 2, 300, 'No activities in this sheet', 12, { color: MUTED, align: 'center' });
+    return ops.join('\n') + '\n';
+  }
+
+  function cycleContents(project) {
+    var sheets = Array.isArray(project.sheets) ? project.sheets : [];
+    var prepared = sheets.map(function (s) { return prepareCycleSheet(s, sheets); });
+    var count = 0;
+    prepared.forEach(function (d) { count += d.pages.length; });
+    var out = [];
+    prepared.forEach(function (d) {
+      for (var p = 0; p < d.pages.length; p++) out.push(renderCyclePage(project, d, p, out.length + 1, count));
+    });
+    if (!out.length) out.push('');
+    return out;
+  }
+
+  /* --------------------------- build / download --------------------------- */
+  function build(project) {
+    var contents;
+    if (project && project.type === 'cycle') {
+      contents = cycleContents(project);
+    } else {
+      var data = prepare(project);
+      contents = [];
+      for (var pi = 0; pi < data.pages.length; pi++) contents.push(renderPage(data, pi, data.pages.length));
+    }
+    var pageCount = contents.length;
+    var total = 5 + pageCount * 2;
+    var w = new Writer();
+    var offsets = new Array(total + 1).fill(0);
+    var title = (project && project.name) || 'Project';
+
+    function obj(n, body) {
+      offsets[n] = w.length;
+      w.raw(n + ' 0 obj\n' + body + '\nendobj\n');
+    }
+
+    w.raw('%PDF-1.4\n');
+    w.raw('%\xE2\xE3\xCF\xD3\n');
+    obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
+    var kids = [];
+    for (var i = 0; i < pageCount; i++) kids.push((6 + i * 2) + ' 0 R');
+    obj(2, '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pageCount + ' >>');
+    obj(3, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
+    obj(4, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
+    var now = new Date();
+    var pdfDate = 'D:' + now.getUTCFullYear() + pad2(now.getUTCMonth() + 1) + pad2(now.getUTCDate()) +
+      pad2(now.getUTCHours()) + pad2(now.getUTCMinutes()) + pad2(now.getUTCSeconds()) + 'Z';
+    obj(5, '<< /Title (' + esc(title) + ') /Author (GanttFlow) /Creator (GanttFlow) /Producer (GanttFlow) /CreationDate (' + pdfDate + ') >>');
+
+    for (i = 0; i < pageCount; i++) {
+      var content = contents[i];
+      var pageNo = 6 + i * 2;
+      var contentNo = 7 + i * 2;
+      obj(pageNo, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + num(PAGE_W) + ' ' + num(PAGE_H) +
+        '] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> /ProcSet [/PDF /Text] >> /Contents ' + contentNo + ' 0 R >>');
+      obj(contentNo, '<< /Length ' + toLatin1(content).length + ' >>\nstream\n' + content + 'endstream');
+    }
+
+    var xrefPos = w.length;
+    var xref = 'xref\n0 ' + (total + 1) + '\n0000000000 65535 f \n';
+    for (i = 1; i <= total; i++) xref += String(offsets[i]).padStart(10, '0') + ' 00000 n \n';
+    w.raw(xref);
+    w.raw('trailer\n<< /Size ' + (total + 1) + ' /Root 1 0 R /Info 5 0 R >>\nstartxref\n' + xrefPos + '\n%%EOF\n');
+    return w.toBytes();
+  }
+
+  function download(project) {
+    var bytes = build(project);
+    var kind = project && project.type === 'cycle' ? '-cycle-time-' : '-gantt-';
+    var filename = slug(project && project.name) + kind + todayISO() + '.pdf';
+    var blob = new Blob([bytes], { type: 'application/pdf' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 2000);
+    return filename;
+  }
+
+  return { build: build, download: download };
+})();

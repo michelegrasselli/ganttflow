@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="GanttFlow — pianificazione attività con diagramma di Gantt, dipendenze automatiche, export PDF e progetto JSON.">
+  <title>GanttFlow — Diagrammi di Gantt</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <rect x="3" y="4" width="10" height="3" rx="1.5" fill="#fff"/>
+            <rect x="7" y="10.5" width="11" height="3" rx="1.5" fill="#fff" opacity=".82"/>
+            <rect x="5" y="17" width="14" height="3" rx="1.5" fill="#fff" opacity=".62"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <div class="app-name">GanttFlow</div>
+          <input id="projectName" class="project-name" value="Nuovo progetto" maxlength="80"
+                 aria-label="Nome del progetto" spellcheck="false" autocomplete="off">
+          <div class="project-meta" id="projectMeta">—</div>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <div class="zoom" role="group" aria-label="Livello di zoom">
+          <button type="button" class="zoom-btn" id="zoomOut" title="Riduci zoom" aria-label="Riduci zoom">−</button>
+          <span class="zoom-label" id="zoomLabel" title="Livello di zoom">Standard</span>
+          <button type="button" class="zoom-btn" id="zoomIn" title="Aumenta zoom" aria-label="Aumenta zoom">+</button>
+        </div>
+        <button type="button" class="btn ghost" id="btnToday" title="Vai a oggi">Oggi</button>
+        <span class="divider" aria-hidden="true"></span>
+        <button type="button" class="btn ghost" id="btnNew" title="Crea un nuovo lavoro: Gantt o stima tempo ciclo">Nuovo</button>
+        <button type="button" class="btn ghost" id="btnImport" title="Importa un progetto .json">Importa</button>
+        <button type="button" class="btn ghost" id="btnJson" title="Esporta il progetto in JSON (Ctrl+S)">Esporta</button>
+        <button type="button" class="btn dark" id="btnPdf" title="Esporta il diagramma in PDF">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.8h5.2L13 5.6v8.6H4z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M9.2 1.8v3.9H13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M6 9.2h4M6 11.5h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+          PDF
+        </button>
+        <button type="button" class="btn primary" id="btnAdd" title="Aggiungi attività">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          Attività
+        </button>
+        <input type="file" id="fileInput" accept=".json,application/json" hidden>
+      </div>
+    </header>
+
+    <div class="statsbar" id="statsbar"></div>
+
+    <main class="board" id="board">
+      <div class="tl-chip" id="tlChip" aria-hidden="true"><span id="tlChipText"></span></div>
+      <div class="grid" id="grid" aria-label="Diagramma di Gantt"></div>
+      <div class="empty" id="empty" hidden>
+        <div class="empty-icon" aria-hidden="true">
+          <svg viewBox="0 0 48 48" fill="none">
+            <rect x="5" y="9" width="38" height="30" rx="6" stroke="currentColor" stroke-width="2"/>
+            <path d="M5 18h38M16 9v30" stroke="currentColor" stroke-width="2"/>
+            <rect x="21" y="23" width="14" height="5" rx="2.5" fill="currentColor" opacity=".75"/>
+            <rect x="21" y="31" width="9" height="4" rx="2" fill="currentColor" opacity=".4"/>
+          </svg>
+        </div>
+        <h2>Inizia a pianificare</h2>
+        <p>Aggiungi la prima attività con durata e date, oppure importa un progetto salvato. Puoi partire anche da un esempio già collegato.</p>
+        <div class="empty-actions">
+          <button type="button" class="btn primary" id="emptyAdd">Aggiungi attività</button>
+          <button type="button" class="btn ghost" id="emptyDemo">Carica esempio</button>
+        </div>
+      </div>
+    </main>
+
+    <nav class="sheetbar" id="sheetBar" aria-label="Pagine del tempo ciclo" hidden>
+      <div class="sheet-tabs" id="sheetTabs" role="tablist"></div>
+      <button type="button" class="sheet-add" id="btnAddSheet" title="Aggiungi una pagina" aria-label="Aggiungi una pagina">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+      <div class="sheet-side">
+        <select class="cal-inp sheet-import" id="importSheetSel" aria-label="Importa un'altra pagina come attività"></select>
+        <button type="button" class="cal-reset" id="btnResetColsCycle" title="Ripristina la larghezza predefinita delle colonne">Ripristina colonne</button>
+      </div>
+    </nav>
+
+    <div class="split-handle" id="calcSplit" role="separator" aria-orientation="horizontal" tabindex="0"
+         aria-label="Dividi lo spazio tra grafico e calcolo" hidden
+         title="Trascina in alto o in basso per dividere lo spazio tra grafico e calcolo · doppio clic per ripristinare"><span aria-hidden="true"></span></div>
+    <section class="ctcalc" id="ctCalc" aria-label="Calcolo del tempo ciclo tra due attività" hidden>
+      <span class="cal-label" title="Differenza tra i secondi di fine di due attività della pagina">Calcolo tempo ciclo</span>
+      <span class="ctc-txt">dalla fine di</span>
+      <select class="cal-inp ctc-sel" id="calcFrom" aria-label="Prima attività: fine di riferimento"></select>
+      <span class="ctc-txt">alla fine di</span>
+      <select class="cal-inp ctc-sel" id="calcTo" aria-label="Seconda attività: fine di riferimento"></select>
+      <span class="ctc-eq" aria-hidden="true">=</span>
+      <output class="ctc-result" id="calcResult" aria-live="polite">—</output>
+      <span class="ctc-detail" id="calcDetail"></span>
+    </section>
+
+    <section class="calpanel" id="calPanel" aria-label="Calendario personalizzato">
+      <div class="cal-block">
+        <span class="cal-label" title="Nasconde un intervallo dal diagramma: le date non occupano spazio. Le durate delle attività non cambiano.">Periodo nascosto</span>
+        <div class="cal-form">
+          <input type="date" class="cal-inp" id="hideStart" aria-label="Inizio del periodo da nascondere">
+          <span class="cal-arrow" aria-hidden="true">→</span>
+          <input type="date" class="cal-inp" id="hideEnd" aria-label="Fine del periodo da nascondere">
+          <button type="button" class="cal-btn" id="btnHideRange" title="Nascondi il periodo dal diagramma">Nascondi</button>
+        </div>
+        <div class="chips" id="hiddenChips" aria-live="polite"></div>
+      </div>
+      <div class="cal-block">
+        <span class="cal-label" title="Aggiunge un giorno rosso personalizzato: viene mostrato in rosso e conta come festivo per la spunta Fest.">Giorni rossi</span>
+        <div class="cal-form">
+          <input type="date" class="cal-inp" id="customDate" aria-label="Data del giorno rosso">
+          <input type="text" class="cal-inp cal-name" id="customName" maxlength="60" placeholder="Nome (facoltativo)" aria-label="Nome del giorno rosso">
+          <button type="button" class="cal-btn" id="btnAddCustom" title="Aggiungi un giorno rosso al calendario">Aggiungi</button>
+        </div>
+        <div class="chips" id="customChips" aria-live="polite"></div>
+      </div>
+      <button type="button" class="cal-reset" id="btnResetCols" title="Ripristina la larghezza predefinita delle colonne">Ripristina colonne</button>
+    </section>
+
+    <footer class="statusbar">
+      <span id="saveStatus">Salvataggio automatico attivo</span>
+      <span class="legend"><i class="lg lg-we" aria-hidden="true"></i>Weekend<i class="lg lg-hol" aria-hidden="true"></i>Festivo</span>
+      <span class="status-hint">Trascina i bordi delle intestazioni per ridimensionare le colonne · Spunte Sab/Dom/Fest: giorni inclusi nella durata.</span>
+      <span class="version">v1.7</span>
+    </footer>
+  </div>
+
+  <div class="modal-backdrop" id="modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" aria-describedby="modalText">
+      <div class="modal-icon" id="modalIcon" aria-hidden="true">!</div>
+      <h2 id="modalTitle">Conferma</h2>
+      <p id="modalText"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" id="modalCancel">Annulla</button>
+        <button type="button" class="btn primary" id="modalOk">Conferma</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="typeModal" hidden>
+    <div class="modal modal-type" role="dialog" aria-modal="true" aria-labelledby="typeTitle">
+      <div class="modal-icon" aria-hidden="true">+</div>
+      <h2 id="typeTitle">Nuovo lavoro</h2>
+      <p>Scegli il tipo di grafico da creare.</p>
+      <div class="type-cards">
+        <button type="button" class="type-card" data-type="gantt">
+          <span class="type-ico" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none"><rect x="3" y="5" width="26" height="22" rx="4" stroke="currentColor" stroke-width="1.8"/><path d="M3 11h26" stroke="currentColor" stroke-width="1.8"/><rect x="7" y="14" width="10" height="3.4" rx="1.7" fill="currentColor"/><rect x="13" y="20" width="12" height="3.4" rx="1.7" fill="currentColor" opacity=".55"/></svg>
+          </span>
+          <b>Diagramma di Gantt</b>
+          <span class="type-desc">Attività su calendario in giorni, con weekend, festivi, periodi nascosti e vincoli.</span>
+        </button>
+        <button type="button" class="type-card" data-type="cycle">
+          <span class="type-ico" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="17" r="11" stroke="currentColor" stroke-width="1.8"/><path d="M16 10v7l4.5 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 3.5h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </span>
+          <b>Stima tempo ciclo</b>
+          <span class="type-desc">Attività in secondi su più pagine; una pagina si può importare in un’altra con nome e tempo ciclo.</span>
+        </button>
+      </div>
+      <p class="type-warn" id="typeWarn">Il lavoro attuale verrà sostituito: se vuoi conservarlo, esportalo prima in JSON.</p>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" id="typeCancel">Annulla</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-wrap" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="js/pdf.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

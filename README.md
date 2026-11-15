@@ -352,9 +352,27 @@ assets/favicon.svg  logo e favicon
 PROJECT_CONTEXT.md  contesto, requisiti e decisioni del progetto
 ```
 
+## Installazione su un altro PC
+
+La cartella `GanttFlow-Installazione/` contiene tutto il necessario: copiala sul
+nuovo PC e fai doppio clic su **Installa GanttFlow.bat** (installa per l'utente
+corrente in `%LOCALAPPDATA%\GanttFlow`, crea i collegamenti su Desktop e menu
+Start, senza permessi di amministratore). Istruzioni complete in
+`GanttFlow-Installazione/LEGGIMI.txt`.
+
+Dopo aver modificato l'app, aggiorna il pacchetto con:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\crea-pacchetto.ps1
+```
+
+I progetti salvati nel browser non si spostano con la cartella: esportali in JSON
+e reimportali sul nuovo PC.
+
 ## Compatibilità
 
-Funziona con le versioni recenti di Chrome, Edge, Firefox e Safari.
+Funziona con le versioni recenti di Chrome, Edge, Firefox e Safari, su
+Windows 10/11 (Home e Pro), macOS e Linux.
 Richiede JavaScript abilitato; il salvataggio automatico usa `localStorage`.
 
 ## Licenza

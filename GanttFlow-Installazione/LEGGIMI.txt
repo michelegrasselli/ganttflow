@@ -1,0 +1,49 @@
+GanttFlow - Pacchetto di installazione
+======================================
+
+Copia l'intera cartella "GanttFlow-Installazione" sul nuovo PC
+(chiavetta USB, rete, cloud...). Non serve installare nient'altro:
+nessun Python, Node.js o connessione internet.
+
+REQUISITI
+---------
+- Windows 10 o Windows 11 (Home o Pro)
+- Un browser recente: Microsoft Edge (già presente in Windows 11),
+  Chrome o Firefox
+
+INSTALLAZIONE (consigliata)
+---------------------------
+1. Fai doppio clic su "Installa GanttFlow.bat".
+2. L'app viene copiata in %LOCALAPPDATA%\GanttFlow e vengono creati
+   i collegamenti "GanttFlow" sul Desktop e nel menu Start.
+   Non servono permessi di amministratore.
+3. Il collegamento apre GanttFlow in una finestra dedicata di Edge.
+
+Se Windows mostra "Windows ha protetto il PC" (SmartScreen), scegli
+"Ulteriori informazioni" -> "Esegui comunque": succede con qualsiasi
+file .bat scaricato o copiato da un altro computer.
+
+USO SENZA INSTALLAZIONE
+-----------------------
+Doppio clic su "Avvia senza installare.bat" (oppure apri direttamente
+app\index.html): l'app si apre nel browser predefinito.
+
+DISINSTALLAZIONE
+----------------
+Doppio clic su "Disinstalla GanttFlow.bat".
+
+TRASFERIRE I PROGETTI DA UN PC ALL'ALTRO
+----------------------------------------
+I progetti vengono salvati automaticamente nel browser del PC su cui
+lavori, quindi NON viaggiano con questa cartella. Per portarli sul
+nuovo PC:
+1. sul vecchio PC usa "Esporta" per salvare il progetto in un file .json;
+2. sul nuovo PC usa "Importa" e scegli quel file.
+
+CONTENUTO
+---------
+app\                        l'applicazione (index.html, css, js, assets)
+Installa GanttFlow.bat      installazione per l'utente corrente
+Avvia senza installare.bat  avvio diretto dalla cartella
+Disinstalla GanttFlow.bat   rimozione
+installa.ps1 / disinstalla.ps1   script usati dai file .bat
