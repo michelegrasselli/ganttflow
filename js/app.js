@@ -1,5 +1,5 @@
 /* ============================================================
-   GanttFlow — applicazione
+   GanttCT by MG — applicazione
    Pianificatore di attività con diagramma di Gantt, dipendenze
    finish-to-start, export PDF e file di progetto JSON.
    ============================================================ */
@@ -1042,7 +1042,7 @@
     var cyc = isCycle();
     document.documentElement.classList.toggle('mode-cycle', cyc);
     var appName = document.querySelector('.app-name');
-    if (appName) appName.textContent = cyc ? 'GanttFlow · Tempo ciclo' : 'GanttFlow';
+    if (appName) appName.textContent = cyc ? 'GanttCT by MG · Tempo ciclo' : 'GanttCT by MG';
     var calPanel = document.getElementById('calPanel');
     if (calPanel) calPanel.hidden = cyc;
     if (sheetBarEl) sheetBarEl.hidden = !cyc;
@@ -2492,7 +2492,7 @@
 
   function syncProjectName() {
     projectNameEl.value = state.project.name || 'Progetto senza titolo';
-    document.title = (projectNameEl.value || 'Progetto') + ' — GanttFlow';
+    document.title = (projectNameEl.value || 'Progetto') + ' — GanttCT by MG';
   }
 
   function updateProjectMeta() {
@@ -3660,7 +3660,7 @@
 
     projectNameEl.addEventListener('input', function () {
       state.project.name = projectNameEl.value.slice(0, 80);
-      document.title = (state.project.name || 'Progetto') + ' — GanttFlow';
+      document.title = (state.project.name || 'Progetto') + ' — GanttCT by MG';
       saveSoon();
     });
     projectNameEl.addEventListener('keydown', function (e) {

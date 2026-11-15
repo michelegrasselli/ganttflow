@@ -1,11 +1,11 @@
-# Project Context — GanttFlow
+# Project Context — GanttCT by MG
 
 File di contesto per tracciare scopo, requisiti e decisioni del progetto.
 Va aggiornato quando cambiano obiettivi, modello dati o architettura.
 
 ## 1. Scopo
 
-GanttFlow è un'applicazione web per pianificare attività e visualizzarle su un
+GanttCT by MG è un'applicazione web per pianificare attività e visualizzarle su un
 diagramma di Gantt. È pensata per funzionare **offline**, senza installazione,
 senza build e senza dipendenze esterne: si apre `index.html` nel browser.
 
@@ -258,7 +258,9 @@ index.html          struttura dell'interfaccia
 css/styles.css      stile, layout responsive, tema
 js/app.js           stato, modello, calcoli, rendering, eventi, storage, import/export
 js/pdf.js           generatore PDF autonomo (window.GanttPDF)
-assets/favicon.svg  logo e favicon
+assets/icon.png     icona dell’app (favicon), generata da Icona.png
+assets/icon.ico     icona dei collegamenti di Windows
+Icona.png           immagine sorgente dell’icona
 ```
 
 - `app.js` è un IIFE in strict mode; lo stato vive in `state.project` e viene

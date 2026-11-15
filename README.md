@@ -1,4 +1,4 @@
-# GanttFlow
+# GanttCT by MG
 
 Pianificatore di attività con diagramma di Gantt, dipendenze automatiche,
 esportazione PDF e file di progetto reimportabile. Include anche un grafico di
@@ -372,19 +372,23 @@ index.html          interfaccia dell'applicazione
 css/styles.css      stile e layout responsive
 js/app.js           logica: modello, date, dipendenze, rendering, storage, import/export
 js/pdf.js           generatore PDF autonomo
-assets/favicon.svg  logo e favicon
+assets/icon.png     icona dell’app (favicon), generata da Icona.png
+assets/icon.ico     icona dei collegamenti di Windows
+Icona.png           immagine sorgente dell’icona
 PROJECT_CONTEXT.md  contesto, requisiti e decisioni del progetto
 ```
 
 ## Installazione su un altro PC
 
-La cartella `GanttFlow-Installazione/` contiene tutto il necessario: copiala sul
-nuovo PC e fai doppio clic su **Installa GanttFlow.bat** (installa per l'utente
-corrente in `%LOCALAPPDATA%\GanttFlow`, crea i collegamenti su Desktop e menu
-Start, senza permessi di amministratore). Istruzioni complete in
-`GanttFlow-Installazione/LEGGIMI.txt`.
+La cartella `GanttCT-Installazione/` contiene tutto il necessario: copiala sul
+nuovo PC e fai doppio clic su **Installa GanttCT.bat** (installa per l'utente
+corrente in `%LOCALAPPDATA%\GanttCT`, crea i collegamenti **GanttCT by MG** su
+Desktop e menu Start con l'icona dell'app, senza permessi di amministratore).
+Istruzioni complete in `GanttCT-Installazione/LEGGIMI.txt`.
 
-Dopo aver modificato l'app, aggiorna il pacchetto con:
+L'icona nasce da `Icona.png`: per cambiarla sostituisci quell'immagine (meglio se
+quadrata) e rigenera il pacchetto. Dopo aver modificato l'app, aggiorna il pacchetto
+(icone comprese) con:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\crea-pacchetto.ps1

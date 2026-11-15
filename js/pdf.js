@@ -1,5 +1,5 @@
 /* ============================================================
-   GanttFlow — generatore PDF (senza dipendenze esterne)
+   GanttCT by MG — generatore PDF (senza dipendenze esterne)
    Produce un PDF A4 orizzontale con tabella attività e barre
    su scala calendario. Scritto a mano: nessuna libreria.
    ============================================================ */
@@ -483,7 +483,7 @@ window.GanttPDF = (function () {
 
     /* piè di pagina */
     opsLine(ops, M, 36, PAGE_W - M, 36, 0.7, [0.9, 0.92, 0.95]);
-    opsText(ops, M, 23, fit('GanttFlow · ' + (project.name || 'Project'), 320, 7, false), 7, { color: MUTED });
+    opsText(ops, M, 23, fit('GanttCT by MG · ' + (project.name || 'Project'), 320, 7, false), 7, { color: MUTED });
     opsRect(ops, 372, 20, 7, 7, WEEKEND_FILL, [0.9, 0.78, 0.7]);
     opsText(ops, 383, 23, 'weekend', 6.5, { color: MUTED });
     opsRect(ops, 428, 20, 7, 7, HOLIDAY_FILL, [0.9, 0.72, 0.72]);
@@ -665,7 +665,7 @@ window.GanttPDF = (function () {
 
     /* piè di pagina */
     opsLine(ops, M, 36, PAGE_W - M, 36, 0.7, [0.9, 0.92, 0.95]);
-    opsText(ops, M, 23, fit('GanttFlow · ' + (project.name || 'Project') + ' · ' + (data.sheet.name || 'Sheet'), 320, 7, false), 7, { color: MUTED });
+    opsText(ops, M, 23, fit('GanttCT by MG · ' + (project.name || 'Project') + ' · ' + (data.sheet.name || 'Sheet'), 320, 7, false), 7, { color: MUTED });
     opsLine(ops, 372, 23.5, 384, 23.5, 1, CT_COLOR, '2 2');
     opsText(ops, 388, 21.5, 'cycle time', 6.5, { color: MUTED });
     opsText(ops, 436, 21.5, '[sheet] = imported sheet (duration = its cycle time)', 6.5, { color: MUTED });
@@ -719,7 +719,7 @@ window.GanttPDF = (function () {
     var now = new Date();
     var pdfDate = 'D:' + now.getUTCFullYear() + pad2(now.getUTCMonth() + 1) + pad2(now.getUTCDate()) +
       pad2(now.getUTCHours()) + pad2(now.getUTCMinutes()) + pad2(now.getUTCSeconds()) + 'Z';
-    obj(5, '<< /Title (' + esc(title) + ') /Author (GanttFlow) /Creator (GanttFlow) /Producer (GanttFlow) /CreationDate (' + pdfDate + ') >>');
+    obj(5, '<< /Title (' + esc(title) + ') /Author (GanttCT by MG) /Creator (GanttCT by MG) /Producer (GanttCT by MG) /CreationDate (' + pdfDate + ') >>');
 
     for (i = 0; i < pageCount; i++) {
       var content = contents[i];
