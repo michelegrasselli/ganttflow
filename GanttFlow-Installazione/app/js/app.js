@@ -1166,7 +1166,10 @@
     '<svg viewBox="0 0 8 14"><circle cx="2" cy="2.5" r="1.1"/><circle cx="6" cy="2.5" r="1.1"/><circle cx="2" cy="7" r="1.1"/><circle cx="6" cy="7" r="1.1"/><circle cx="2" cy="11.5" r="1.1"/><circle cx="6" cy="11.5" r="1.1"/></svg></button>';
   var LINK_POINTS =
     '<span class="link-pt link-pt-start" data-pt="start" title="Inizio: trascina sull’inizio o sulla fine di un’altra attività per creare un vincolo"></span>' +
-    '<span class="link-pt link-pt-end" data-pt="end" title="Fine: trascina sull’inizio o sulla fine di un’altra attività per creare un vincolo"></span>';
+    '<span class="link-pt link-pt-end" data-pt="end" title="Fine: trascina sull’inizio o sulla fine di un’altra attività per creare un vincolo"></span>' +
+    '<span class="move-grip" title="Trascina a destra o a sinistra per spostare l’attività nel tempo (i vincoli si aggiornano)">' +
+      '<svg viewBox="0 0 20 10" aria-hidden="true"><path d="M1.5 5h17M5 1.8 1.5 5 5 8.2M15 1.8 18.5 5 15 8.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+    '</span>';
   var LOCK_SVG = '<span class="lock" aria-hidden="true"><svg viewBox="0 0 16 16"><rect x="3.2" y="7" width="9.6" height="6.6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0V7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></span>';
   var SHEET_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2.5 6.5h11M6.5 6.5v7" stroke="currentColor" stroke-width="1.3"/></svg>';
 
@@ -1322,6 +1325,7 @@
     var e = row.querySelector('.link-pt-end');
     if (s) s.style.left = left + 'px';
     if (e) e.style.left = (left + width) + 'px';
+    placeMoveGrip(row, left, width);
   }
 
   /* Traduce i due punti collegati nel vincolo del modello (un solo predecessore per attività):
@@ -1486,6 +1490,185 @@
         } catch (err) { /* ignore */ }
       }
     });
+  }
+
+  /* ---------------- spostamento delle barre nel tempo ---------------- */
+  /* Trascinando una barra (o la maniglia che compare al passaggio del mouse)
+     l'attività si sposta avanti o indietro. Senza vincolo cambia l'inizio;
+     con un vincolo cambia l'offset, così il collegamento resta valido.
+     Le attività che dipendono da questa si aggiornano a catena con recalc(). */
+  var moveDrag = null;
+  var MOVE_SNAP = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60];
+
+  function placeMoveGrip(row, left, width) {
+    var g = row.querySelector('.move-grip');
+    if (g) g.style.left = (left + width / 2) + 'px';
+  }
+
+  function onMoveDragStart(e) {
+    if (e.button !== 0 || linkDrag || rowDrag) return;
+    var hit = e.target.closest ? e.target.closest('.bar, .move-grip') : null;
+    if (!hit) return;
+    var row = hit.closest('.row.task');
+    var t = row ? taskById(row.dataset.id) : null;
+    if (!t) return;
+    e.preventDefault();
+    closeColorPops(null);
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    selectTask(t.id);
+    var bar = row.querySelector('.bar');
+    var lane = row.querySelector('.lane');
+    moveDrag = {
+      id: t.id,
+      row: row,
+      lane: lane,
+      grab: e.clientX - bar.getBoundingClientRect().left,
+      startX: e.clientX,
+      moved: false,
+      snapshot: JSON.stringify(tasks()),
+      projectAt: state.project,
+      sheetAt: isCycle() ? state.project.activeSheet : null,
+      lockRange: isCycle() || !range ? null : { start: range.start, end: range.end },
+      key: null,
+      label: null,
+      info: ''
+    };
+  }
+
+  /* Data (Gantt) o secondo (tempo ciclo) di inizio desiderato sotto il cursore. */
+  function moveTargetAt(clientX) {
+    var x = clientX - moveDrag.lane.getBoundingClientRect().left - moveDrag.grab - 1;
+    if (isCycle()) {
+      var px = (cycleScale || buildCycleScale()).px;
+      var step = MOVE_SNAP[MOVE_SNAP.length - 1];
+      for (var i = 0; i < MOVE_SNAP.length; i++) if (MOVE_SNAP[i] * px >= 6) { step = MOVE_SNAP[i]; break; }
+      return Math.max(0, Math.min(MAX_SECONDS, round1(Math.round(x / px / step) * step)));
+    }
+    if (!timeMap || !timeMap.visible.length) return null;
+    var idx = Math.round(x / timeMap.px);
+    idx = Math.max(0, Math.min(timeMap.visible.length - 1, idx));
+    return timeMap.visible[idx];
+  }
+
+  /* Applica l'inizio desiderato; restituisce true se il vincolo ha limitato lo spostamento. */
+  function applyMove(t, want) {
+    var p = t.predecessorId ? taskById(t.predecessorId) : null;
+    if (isCycle()) {
+      if (!p) { t.start = want; t.end = round1(want + t.duration); return false; }
+      var lagS = t.link === 'SS' ? want - p.start : (t.link === 'FF' ? p.end - want - t.duration : want - p.end);
+      lagS = round1(lagS);
+      t.lag = Math.max(0, Math.min(MAX_LAG_SECONDS, lagS));
+      return lagS < 0 || lagS > MAX_LAG_SECONDS;
+    }
+    if (!p) { t.start = want; t.end = endFromStart(nextCounted(want, t), t.duration, t); return false; }
+    var lag;
+    if (t.link === 'SS') lag = diffDays(p.start, want);
+    else if (t.link === 'FF') lag = diffDays(endFromStart(nextCounted(want, t), t.duration, t), p.end) - 1;
+    else lag = diffDays(p.end, want) - 1;
+    t.lag = Math.max(0, Math.min(365, lag));
+    return lag < 0 || lag > 365;
+  }
+
+  function moveInfo(t, clamped) {
+    var p = t.predecessorId ? taskById(t.predecessorId) : null;
+    var txt = isCycle()
+      ? fmtSec(t.start) + ' → ' + fmtSec(t.end)
+      : fmtShort(t.start) + ' → ' + fmtShort(t.end);
+    if (p) {
+      txt += ' · offset ' + (isCycle() ? fmtSec(t.lag) : t.lag + ' gg');
+      if (clamped) txt += ' · limite del vincolo «' + LINK_TYPES[t.link].label + '» con «' + (p.name || 'attività') + '»';
+    }
+    return txt;
+  }
+
+  /* Mantiene ferma sullo schermo una data quando l'intervallo del Gantt si allarga o si riduce. */
+  function keepDateInPlace(iso, fn) {
+    if (isCycle() || !iso) { fn(); return; }
+    var before = xOf(iso);
+    fn();
+    var diff = xOf(iso) - before;
+    if (diff) board.scrollLeft += diff;
+  }
+
+  function updateMoveDrag(clientX, clientY) {
+    var d = moveDrag;
+    var t = taskById(d.id);
+    if (!t) return;
+    var want = moveTargetAt(clientX);
+    if (want === null) return;
+    var key = String(want);
+    if (key !== d.key) {
+      d.key = key;
+      var clamped = applyMove(t, want);
+      keepDateInPlace(range ? range.start : null, afterEdit);
+      d.info = moveInfo(t, clamped);
+      d.label.classList.toggle('bad', clamped);
+      d.label.classList.toggle('ok', !clamped);
+    }
+    var g = grid.getBoundingClientRect();
+    d.label.textContent = d.info;
+    d.label.style.left = (clientX - g.left + 14) + 'px';
+    d.label.style.top = (clientY - g.top + 16) + 'px';
+  }
+
+  function onMoveDragMove(e) {
+    var d = moveDrag;
+    if (!d) return;
+    if (!d.moved) {
+      if (Math.abs(e.clientX - d.startX) < 4) return;
+      d.moved = true;
+      d.label = el('div', 'link-drag-label ok');
+      grid.appendChild(d.label);
+      d.row.classList.add('moving');
+      document.body.classList.add('bar-moving');
+    }
+    e.preventDefault();
+    var br = board.getBoundingClientRect();
+    var edge = 30;
+    if (e.clientX > br.right - edge) board.scrollLeft += 14;
+    else if (e.clientX < br.left + leftWidth() + edge) board.scrollLeft -= 14;
+    updateMoveDrag(e.clientX, e.clientY);
+  }
+
+  function onMoveDragEnd() {
+    var d = moveDrag;
+    if (!d) return;
+    moveDrag = null;
+    if (!d.moved) return;
+    if (d.label) d.label.remove();
+    d.row.classList.remove('moving');
+    document.body.classList.remove('bar-moving');
+    var t = taskById(d.id);
+    if (!t || d.snapshot === JSON.stringify(tasks())) { renderAll(); return; }
+    keepDateInPlace(t.start, renderAll);
+    toast('«' + (t.name || 'Attività') + '» spostata: ' + moveInfo(t, false) + '.', {
+      actionLabel: 'Annulla',
+      duration: 7000,
+      onAction: function () {
+        if (state.project !== d.projectAt) return;
+        if (isCycle()) {
+          if (!sheetById(d.sheetAt)) return;
+          state.project.activeSheet = d.sheetAt;
+        }
+        try {
+          setTasks(JSON.parse(d.snapshot));
+          renderAll();
+          toast('Spostamento annullato.');
+        } catch (err) { /* ignore */ }
+      }
+    });
+  }
+
+  /* Canc (o Backspace su Mac) elimina l'attività selezionata, se non si sta scrivendo in un campo. */
+  function onDeleteKey(e) {
+    if (e.key !== 'Delete' && !(IS_MAC && e.key === 'Backspace')) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!modalEl.hidden || (typeModalEl && !typeModalEl.hidden)) return;
+    var a = document.activeElement;
+    if (a && (a.tagName === 'INPUT' || a.tagName === 'SELECT' || a.tagName === 'TEXTAREA' || a.isContentEditable)) return;
+    if (!state.selectedId || !taskById(state.selectedId)) return;
+    e.preventDefault();
+    deleteTask(state.selectedId);
   }
 
   /* ---------------- calcolo del tempo ciclo tra due fini ---------------- */
@@ -1785,6 +1968,14 @@
     }
     var start = startOfMonth(addDays(min, -7));
     var end = endOfMonth(addDays(max, 7));
+    /* durante lo spostamento di una barra l'intervallo può solo allargarsi */
+    var lock = moveDrag && moveDrag.lockRange;
+    if (lock) {
+      if (lock.start < start) start = lock.start;
+      if (lock.end > end) end = lock.end;
+      lock.start = start;
+      lock.end = end;
+    }
     return { start: start, end: end, days: diffDays(start, end) + 1 };
   }
 
@@ -3360,6 +3551,11 @@
     grid.addEventListener('mousedown', onColMouseDown);
     grid.addEventListener('mousedown', onRowDragStart);
     grid.addEventListener('mousedown', onLinkDragStart);
+    grid.addEventListener('mousedown', onMoveDragStart);
+    document.addEventListener('mousemove', onMoveDragMove);
+    document.addEventListener('mouseup', onMoveDragEnd);
+    window.addEventListener('blur', onMoveDragEnd);
+    document.addEventListener('keydown', onDeleteKey);
     document.addEventListener('mousemove', onLinkDragMove);
     document.addEventListener('mouseup', onLinkDragEnd);
     window.addEventListener('blur', onLinkDragEnd);
@@ -3483,7 +3679,11 @@
         if (e.key === 'Escape') { e.preventDefault(); closeTypeChooser(null); }
         return;
       }
-      if (e.key === 'Escape') closeColorPops(null);
+      if (e.key === 'Escape') {
+        closeColorPops(null);
+        var ae = document.activeElement;
+        if (!ae || ae === document.body || !grid.contains(ae)) selectTask(null);
+      }
       if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 's') {
         e.preventDefault();
         exportJSON();

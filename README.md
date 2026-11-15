@@ -166,6 +166,29 @@ viene sostituito (il messaggio lo indica e offre **Annulla**). I collegamenti ch
 creerebbero un ciclo sono segnalati in rosso e non vengono creati. Funziona sia nel
 Gantt sia nel tempo ciclo.
 
+### Spostare un'attività nel tempo
+
+Passando sopra una barra compare al centro una maniglia **⇆** e il cursore diventa
+una mano. Trascina la barra (o la maniglia) a destra o a sinistra: un'etichetta mostra
+le nuove date (o i secondi, nel tempo ciclo).
+
+- **Senza vincolo** cambia la data/il secondo di inizio; la durata resta invariata.
+- **Con un vincolo** cambia l'**offset** del vincolo, così il collegamento resta
+  valido. L'attività non può andare oltre il limite del vincolo (per esempio prima
+  della fine dell'attività a cui è collegata con «Inizia dopo»): l'etichetta diventa
+  rossa e la barra si ferma lì.
+- Le attività che dipendono da quella spostata si aggiornano a catena.
+
+Al rilascio un messaggio riepiloga lo spostamento e offre **Annulla**. Nel Gantt i
+periodi nascosti vengono saltati; nel tempo ciclo lo spostamento procede a passi
+adatti allo zoom (da 0,1 s in su).
+
+### Selezionare ed eliminare dal grafico
+
+Un clic su una barra seleziona l'attività (evidenziata anche nella tabella). Premi
+**Canc** per eliminarla: un messaggio offre **Annulla**. Mentre stai scrivendo in un
+campo, Canc agisce solo sul testo. **Esc** toglie la selezione.
+
 ### Riordinare le attività
 
 Passando con il mouse sul bordo sinistro di una riga compare una **maniglia** (⋮⋮):
@@ -228,7 +251,8 @@ righello dei secondi e linea del tempo ciclo.
 | `Ctrl`/`⌘` + `O` | Importa un progetto |
 | `Ctrl`/`⌘` + rotella | Zoom del diagramma |
 | `Invio` | Conferma il campo in modifica |
-| `Esc` | Annulla la modifica / chiude la finestra |
+| `Esc` | Annulla la modifica / chiude la finestra / toglie la selezione |
+| `Canc` | Elimina l'attività selezionata sul grafico (con Annulla) |
 
 ## Formato del progetto
 

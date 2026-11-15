@@ -127,6 +127,17 @@ reimportabile.
 - Linea guida curva + etichetta descrittiva; cicli segnalati in rosso e rifiutati;
   scorrimento automatico vicino ai bordi.
 
+### 2.5.3 Spostamento delle barre e selezione dal grafico
+- Trascinando una barra (o la maniglia ⇆ che compare al passaggio) l'attività si sposta
+  nel tempo. Senza predecessore cambia `start`; con predecessore cambia `lag` (limitato
+  a 0…max, quindi la barra si ferma al limite del vincolo). `recalc()` aggiorna a catena
+  i dipendenti. Gantt: posizione → giorno visibile (salta i periodi nascosti) e
+  l'intervallo del calendario può solo allargarsi durante il trascinamento, con
+  compensazione dello scorrimento; tempo ciclo: passo minimo 0,1 s adattato allo zoom.
+- Rilascio con messaggio e **Annulla** (istantanea delle attività della pagina).
+- Clic su una barra = selezione; **Canc** (Backspace su Mac) elimina la selezionata se il
+  fuoco non è in un campo; **Esc** toglie la selezione.
+
 ### 2.5.1 Riordino attività
 - Maniglia (⋮⋮) visibile al passaggio sul bordo sinistro della riga: trascinando si
   sposta l'attività sopra/sotto le altre (linea guida blu, scorrimento automatico ai
@@ -294,7 +305,11 @@ assets/favicon.svg  logo e favicon
 | Tempo ciclo misurato dal secondo 0 | Un ritardo iniziale fa parte del ciclo; coerente con il righello che parte da 0. |
 | Autosalvataggio locale | L'utente non deve perdere il lavoro chiudendo il browser. |
 
-## 6. Stato attuale (v1.7)
+## 6. Stato attuale (v1.8)
+
+Novità v1.8: spostamento delle attività nel tempo trascinando le barre (con
+aggiornamento di offset e dipendenti), selezione dal grafico ed eliminazione con Canc
+(Gantt e tempo ciclo).
 
 Novità v1.7: creazione dei vincoli trascinando tra inizio e fine delle barre (Gantt e
 tempo ciclo).

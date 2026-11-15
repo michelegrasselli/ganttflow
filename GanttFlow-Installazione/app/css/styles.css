@@ -1538,3 +1538,35 @@ body.link-dragging, body.link-dragging * { cursor: crosshair !important; user-se
 }
 .link-drag-label.ok { background: var(--accent); }
 .link-drag-label.bad { background: #9f1239; }
+
+/* ---------------- spostamento delle barre nel tempo ---------------- */
+.bar { cursor: grab; }
+.move-grip {
+  position: absolute;
+  top: 50%;
+  width: 26px;
+  height: 14px;
+  margin: -7px 0 0 -13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--accent);
+  border: 1.5px solid var(--accent);
+  box-shadow: 0 1px 4px rgba(15, 23, 42, .3);
+  cursor: grab;
+  z-index: 7;
+  opacity: 0;
+  transform: scale(.7);
+  pointer-events: none;
+  transition: opacity .12s, transform .12s, background .12s, color .12s;
+}
+.move-grip svg { width: 15px; height: 8px; display: block; }
+.row.task:hover .move-grip,
+.row.task.moving .move-grip { opacity: 1; transform: scale(1); pointer-events: auto; }
+.move-grip:hover,
+.row.task.moving .move-grip { background: var(--accent); color: #fff; transform: scale(1.12); }
+.grid.linking .move-grip { display: none; }
+.row.task.moving .bar { box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(79, 70, 229, .7), 0 10px 20px -8px rgba(15, 23, 42, .6); }
+body.bar-moving, body.bar-moving * { cursor: grabbing !important; user-select: none; }
