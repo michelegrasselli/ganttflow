@@ -1578,44 +1578,6 @@ body.link-dragging, body.link-dragging * { cursor: crosshair !important; user-se
 .row.person.moving .bar { box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(79, 70, 229, .7), 0 10px 20px -8px rgba(15, 23, 42, .6); }
 body.bar-moving, body.bar-moving * { cursor: grabbing !important; user-select: none; }
 
-/* ---------------- titolo dell'applicazione ---------------- */
-.app-title {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-right: 14px;
-  padding-right: 16px;
-  border-right: 1px solid var(--line);
-  white-space: nowrap;
-  font-family: "Bahnschrift", "DIN Alternate", "DIN Next", "Barlow", "Roboto Condensed", "Segoe UI", sans-serif;
-  user-select: none;
-}
-.app-title-main {
-  font-size: 22px;
-  font-weight: 700;
-  font-stretch: semi-condensed;
-  letter-spacing: .02em;
-  line-height: 1;
-  background: linear-gradient(90deg, #4338ca 0%, #7c3aed 60%, #a855f7 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-.app-title-by {
-  font-size: 12px;
-  font-weight: 400;
-  font-stretch: semi-condensed;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-  color: #64748b;
-}
-@media (max-width: 1280px) {
-  .app-title { margin-right: 6px; padding-right: 10px; gap: 6px; }
-  .app-title-main { font-size: 19px; }
-  .app-title-by { font-size: 10.5px; letter-spacing: .08em; }
-}
-@media (max-width: 1100px) { .app-title-by { display: none; } }
-@media (max-width: 860px) { .app-title { display: none; } }
 
 /* ---------------- periodi multipli (slot) ---------------- */
 .lane .bar.thin { padding: 0 4px; border-radius: 4px; }
@@ -1737,3 +1699,45 @@ body.bar-moving, body.bar-moving * { cursor: grabbing !important; user-select: n
 }
 .section-add:hover { background: #f3e8ff; border-color: #a78bfa; }
 .section-add svg { width: 12px; height: 12px; }
+
+/* ---------------- titolo dell'applicazione (accanto al titolo del progetto) ---------------- */
+.app-title {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  margin-left: 4px;
+  padding-left: 14px;
+  height: 40px;
+  border-left: 1px solid var(--line);
+  white-space: nowrap;
+  font-family: "Bahnschrift", "DIN Alternate", "DIN Next", "Barlow", "Roboto Condensed", "Segoe UI", sans-serif;
+  user-select: none;
+}
+.app-title-main {
+  font-size: 21px;
+  font-weight: 700;
+  font-stretch: semi-condensed;
+  letter-spacing: .02em;
+  line-height: 1;
+  background: linear-gradient(90deg, #4338ca 0%, #7c3aed 60%, #a855f7 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.app-title-by {
+  font-size: 9.5px;
+  font-weight: 400;
+  font-stretch: semi-condensed;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  line-height: 1;
+  color: #64748b;
+}
+@media (max-width: 1100px) {
+  .app-title { padding-left: 10px; margin-left: 0; }
+  .app-title-main { font-size: 18px; }
+  .app-title-by { font-size: 8.5px; letter-spacing: .08em; }
+}
+@media (max-width: 760px) { .app-title { display: none; } }

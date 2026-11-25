@@ -154,7 +154,7 @@ reimportabile.
 - `project.people[]` con la stessa struttura di `tasks[]`, mostrato sotto le attività
   nella sezione «Persone» (+ Persona). PDF: persone «(P)» dopo le attività, periodi sulla
   stessa riga, «[n periods]» nel nome.
-- Titolo nella barra in alto: «GanttCT by Michele Grasselli» (font Bahnschrift,
+- Titolo nella barra in alto, accanto al titolo del progetto: «GanttCT by Michele Grasselli» (font Bahnschrift,
   incluso in Windows 10/11, con alternative).
 
 ### 2.5.1 Riordino attività
@@ -320,13 +320,19 @@ Icona.png           immagine sorgente dell’icona
 | Colonne con limiti min/max | Evita colonne inutilizzabili o layout rotti ed è coerente con il ridimensionamento da tastiera/doppio clic. |
 | PDF scritto a mano | Nessuna libreria disponibile offline; output vettoriale e testo selezionabile. |
 | Formato progetto versionato | Consente evoluzioni future mantenendo la compatibilità. |
+| **Regola vincolante: i file esportati restano importabili da ogni versione successiva** | Il JSON è il modo di conservare e trasferire il lavoro tra PC: un aggiornamento dell'app non deve mai rendere illeggibile un file vecchio. Ogni cambio di formato aumenta `FILE_VERSION`, aggiunge un passaggio in `FILE_MIGRATIONS` (solo aggiunte con valori predefiniti, mai rimuovere la lettura di campi vecchi) e un esempio in `test/compat-fixtures.js`; `test/compatibilita.html` deve dare tutto OK. I file senza versione vengono riconosciuti dai campi presenti; quelli di versioni più recenti si importano con avviso. |
 | Tempo ciclo nello stesso app.js con `type` di progetto | Riusa griglia, vincoli, colori, colonne, toast e PDF: stessa grafica, una sola app da mantenere. |
 | Secondi continui (fine esclusiva) e decimi | Nel tempo ciclo le attività si susseguono senza "giorno inclusivo"; i decimi coprono le stime tipiche di stazioni e macchine. |
 | Pagina importata come attività collegata | Il tempo ciclo della pagina sorgente resta sempre coerente; il ricalcolo visita le pagine in ordine di dipendenza e rompe eventuali cicli. |
 | Tempo ciclo misurato dal secondo 0 | Un ritardo iniziale fa parte del ciclo; coerente con il righello che parte da 0. |
 | Autosalvataggio locale | L'utente non deve perdere il lavoro chiudendo il browser. |
 
-## 6. Stato attuale (v2.0)
+## 6. Stato attuale (v2.1)
+
+Novità v2.1: titolo «GanttCT by Michele Grasselli» spostato accanto al titolo del
+progetto (leggibile anche a finestra ridotta); compatibilità garantita dei file JSON
+con le versioni successive (migrazioni per versione e pagina di verifica
+`test/compatibilita.html`); collegamenti dell'installazione rinominati «GanttCT by MG V0».
 
 Novità v2.0: periodi multipli per attività sulla stessa riga del Gantt, ciascuno con
 vincoli propri; sezione Persone sotto le attività (anch'esse con periodi multipli);

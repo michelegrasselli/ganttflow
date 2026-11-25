@@ -362,6 +362,22 @@ Il file esportato è JSON e può essere reimportato con il pulsante **Importa**:
   periodi dello stesso elenco. I file senza `slots` o `people` (versioni precedenti)
   si importano normalmente.
 
+### Compatibilità dei file esportati
+
+Ogni file JSON esportato da una qualsiasi versione dell'app si può importare in tutte
+le versioni successive. Il file contiene la versione del formato (`version`, oggi 5) e
+quella dell'app (`appVersion`); all'importazione l'app riconosce la versione (anche
+dei primi file, che non la indicavano) e aggiorna il contenuto passo per passo al
+formato attuale, aggiungendo i campi nuovi con i valori predefiniti. Un file creato con
+una versione **più recente** viene comunque importato, con un avviso: le informazioni
+che la versione in uso non conosce vengono ignorate.
+
+Per verificarlo apri `test/compatibilita.html` (basta un doppio clic): importa con il
+codice attuale un file d'esempio per ogni versione del formato mai prodotta, dalla 1.0
+in poi, e tutte le righe devono risultare **OK**. Quando il formato cambia si aggiunge
+un esempio in `test/compat-fixtures.js` e un passaggio di conversione in `js/app.js`
+(`FILE_MIGRATIONS`), senza mai togliere la lettura dei campi vecchi.
+
 - Le date usano il formato `YYYY-MM-DD` e sono giorni di calendario inclusivi.
 - `predecessorId` è `null` o l'id di un'altra attività dello stesso progetto.
 - `link` è il tipo di vincolo: `FS` (inizia dopo la fine), `SS` (stessa distanza tra
@@ -444,6 +460,7 @@ js/pdf.js           generatore PDF autonomo
 assets/icon.png     icona dell’app (favicon), generata da Icona.png
 assets/icon.ico     icona dei collegamenti di Windows
 Icona.png           immagine sorgente dell’icona
+test/               verifica della compatibilità dei file (compatibilita.html)
 PROJECT_CONTEXT.md  contesto, requisiti e decisioni del progetto
 ```
 
@@ -451,7 +468,7 @@ PROJECT_CONTEXT.md  contesto, requisiti e decisioni del progetto
 
 La cartella `GanttCT-Installazione/` contiene tutto il necessario: copiala sul
 nuovo PC e fai doppio clic su **Installa GanttCT.bat** (installa per l'utente
-corrente in `%LOCALAPPDATA%\GanttCT`, crea i collegamenti **GanttCT by MG** su
+corrente in `%LOCALAPPDATA%\GanttCT`, crea i collegamenti **GanttCT by MG V0** su
 Desktop e menu Start con l'icona dell'app, senza permessi di amministratore).
 Istruzioni complete in `GanttCT-Installazione/LEGGIMI.txt`.
 

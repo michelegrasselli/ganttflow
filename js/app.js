@@ -3873,11 +3873,86 @@
     if (tab && !e.target.closest('.sheet-rename')) selectSheet(tab.dataset.id);
   }
 
+  /* ---------------- file di progetto: formato e compatibilità ----------------
+     REGOLA: ogni file esportato da qualsiasi versione dell'app deve poter essere
+     importato da tutte le versioni successive. Quando il formato cambia:
+       1. aumentare FILE_VERSION;
+       2. aggiungere in FILE_MIGRATIONS il passaggio dalla versione precedente
+          (solo aggiunte con valori predefiniti: mai rimuovere la lettura di
+          campi vecchi);
+       3. aggiungere un file d'esempio in test/compat-fixtures.js e verificare
+          con test/compatibilita.html.
+     Storico: v1 (1.0–1.1) attività base, `link` dalla 1.1 · v2 (1.2) Sab/Dom/Fest ·
+     v3 (1.3) periodi nascosti e giorni rossi · v4 (1.5) tempo ciclo con pagine ·
+     v5 (2.0) periodi multipli (`slots`) e persone (`people`). */
+  var FILE_FORMAT = 'ganttflow-project';
+  var FILE_VERSION = 5;
+  var APP_VERSION = '2.1';
+
+  var FILE_MIGRATIONS = {
+    /* v1 → v2: vincolo predefinito «Inizia dopo», offset 0 */
+    1: function (p) {
+      (p.tasks || []).forEach(function (t) {
+        if (t && typeof t === 'object') {
+          if (!t.link) t.link = 'FS';
+          if (t.lag === undefined) t.lag = 0;
+        }
+      });
+    },
+    /* v2 → v3: Sab/Dom/Fest non considerati (comportamento delle versioni precedenti) */
+    2: function (p) {
+      (p.tasks || []).forEach(function (t) {
+        if (!t || typeof t !== 'object') return;
+        ['countSat', 'countSun', 'countHol'].forEach(function (k) { if (t[k] === undefined) t[k] = false; });
+      });
+    },
+    /* v3 → v4: calendario personalizzato vuoto se assente */
+    3: function (p) {
+      if (!Array.isArray(p.hiddenRanges)) p.hiddenRanges = [];
+      if (!Array.isArray(p.customHolidays)) p.customHolidays = [];
+    },
+    /* v4 → v5: nessun periodo aggiuntivo e nessuna persona */
+    4: function (p) {
+      if (p.type === 'cycle') return;
+      (p.tasks || []).forEach(function (t) { if (t && typeof t === 'object' && !Array.isArray(t.slots)) t.slots = []; });
+      if (!Array.isArray(p.people)) p.people = [];
+    }
+  };
+
+  /* Riconosce la versione di un file (anche dei primi file senza involucro)
+     e lo porta al formato attuale. Restituisce { project, version, newer }. */
+  function readProjectFile(data) {
+    if (typeof data === 'string') data = JSON.parse(data);
+    if (!data || typeof data !== 'object') throw new Error('File non valido: non contiene un progetto.');
+    var wrapped = data.project && typeof data.project === 'object';
+    var raw = wrapped ? data.project : data;
+    var version = wrapped ? parseInt(data.version, 10) : NaN;
+    if (!Number.isFinite(version) || version < 1) version = guessFileVersion(raw);
+    var p = JSON.parse(JSON.stringify(raw));
+    for (var v = Math.min(version, FILE_VERSION); v < FILE_VERSION; v++) {
+      if (FILE_MIGRATIONS[v]) FILE_MIGRATIONS[v](p);
+    }
+    return { project: sanitizeAny(p), version: version, newer: version > FILE_VERSION };
+  }
+
+  /* Per i file salvati senza numero di versione: deduce la versione dai campi presenti. */
+  function guessFileVersion(raw) {
+    if (!raw || typeof raw !== 'object') return 1;
+    if (raw.type === 'cycle' || Array.isArray(raw.sheets)) return 4;
+    if (Array.isArray(raw.people)) return 5;
+    var list = Array.isArray(raw.tasks) ? raw.tasks : [];
+    if (list.some(function (t) { return t && Array.isArray(t.slots); })) return 5;
+    if (Array.isArray(raw.hiddenRanges) || Array.isArray(raw.customHolidays)) return 3;
+    if (list.some(function (t) { return t && t.countSat !== undefined; })) return 2;
+    return 1;
+  }
+
   function exportJSON() {
     saveNow();
     var payload = {
-      format: 'ganttflow-project',
-      version: 5,
+      format: FILE_FORMAT,
+      version: FILE_VERSION,
+      appVersion: APP_VERSION,
       exportedAt: new Date().toISOString(),
       project: state.project
     };
@@ -3910,9 +3985,8 @@
     var reader = new FileReader();
     reader.onload = function () {
       try {
-        var data = JSON.parse(String(reader.result));
-        var raw = data && data.project ? data.project : data;
-        var p = sanitizeAny(raw);
+        var file = readProjectFile(String(reader.result));
+        var p = file.project;
         var count = projectTaskCount(p);
         if (p.type !== 'cycle' && !count) throw new Error('Il file non contiene attività.');
         setProject(p);
@@ -3920,10 +3994,12 @@
         scrollToDate(firstGroup ? firstGroup.start : todayISO());
         saveNow();
         var extraPeople = p.type === 'cycle' ? 0 : (Array.isArray(p.people) ? p.people.length : 0);
-        toast(p.type === 'cycle'
+        toast((p.type === 'cycle'
           ? 'Tempo ciclo «' + p.name + '» importato: ' + p.sheets.length + (p.sheets.length === 1 ? ' pagina, ' : ' pagine, ') + count + ' attività.'
           : 'Progetto «' + p.name + '» importato: ' + p.tasks.length + ' attività' +
-            (extraPeople ? ' e ' + extraPeople + (extraPeople === 1 ? ' persona' : ' persone') : '') + '.');
+            (extraPeople ? ' e ' + extraPeople + (extraPeople === 1 ? ' persona' : ' persone') : '') + '.') +
+          (file.newer ? ' Il file è stato creato con una versione più recente dell’app: le informazioni che questa versione non conosce sono state ignorate.' : ''),
+          file.newer ? { duration: 9000 } : undefined);
       } catch (err) {
         toast(err && err.message ? err.message : 'File non valido.', { type: 'error' });
       }
@@ -3943,7 +4019,7 @@
     if (!state.project) return;
     try {
       state.project.updatedAt = new Date().toISOString();
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ format: 'ganttflow', version: 1, project: state.project }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ format: 'ganttflow', version: FILE_VERSION, appVersion: APP_VERSION, project: state.project }));
       saveStatusEl.textContent = 'Salvato alle ' + fmtTime(new Date());
     } catch (e) {
       saveStatusEl.textContent = 'Salvataggio locale non disponibile';
@@ -4418,8 +4494,7 @@
     try {
       var raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return null;
-      var data = JSON.parse(raw);
-      return sanitizeAny(data && data.project ? data.project : data);
+      return readProjectFile(raw).project;
     } catch (e) {
       return null;
     }
@@ -4483,6 +4558,15 @@
     window.addEventListener('beforeunload', saveNow);
   }
 
+  /* Accesso ai file di progetto per la pagina di verifica della compatibilità
+     (test/compatibilita.html), che carica questo script senza avviare l'interfaccia. */
+  window.GanttCTFiles = {
+    formatVersion: FILE_VERSION,
+    appVersion: APP_VERSION,
+    read: function (data) { return readProjectFile(data); }
+  };
+
+  if (window.GANTTCT_NO_UI) return;
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })();

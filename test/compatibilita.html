@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GanttCT — verifica compatibilità file</title>
+  <style>
+    :root { --ok: #15803d; --ko: #b91c1c; --line: #e2e8f0; --muted: #64748b; }
+    body { margin: 0; padding: 24px 16px; background: #f8fafc; color: #0f172a; font: 14px/1.5 "Segoe UI", system-ui, sans-serif; }
+    main { max-width: 900px; margin: 0 auto; }
+    h1 { margin: 0 0 4px; font: 700 22px "Bahnschrift", "Segoe UI", sans-serif; }
+    p { margin: 0 0 18px; color: var(--muted); }
+    .summary { display: inline-block; margin-bottom: 16px; padding: 6px 12px; border-radius: 8px; font-weight: 700; }
+    .summary.ok { background: #dcfce7; color: var(--ok); }
+    .summary.ko { background: #fee2e2; color: var(--ko); }
+    table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+    th, td { padding: 9px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); background: #f1f5f9; }
+    td.res { font-weight: 700; white-space: nowrap; }
+    td.res.ok { color: var(--ok); }
+    td.res.ko { color: var(--ko); }
+    td.detail { color: var(--muted); font-size: 12.5px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Verifica compatibilità dei file di progetto</h1>
+    <p>Importa con il codice attuale dell'app un file d'esempio per ogni versione del formato
+      mai prodotta. Tutte le righe devono risultare «OK».</p>
+    <div id="summary" class="summary">…</div>
+    <table>
+      <thead><tr><th>File</th><th>Esito</th><th>Dettagli</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </main>
+  <script>window.GANTTCT_NO_UI = true;</script>
+  <script src="../js/app.js"></script>
+  <script src="compat-fixtures.js"></script>
+  <script>
+    (function () {
+      var rows = document.getElementById('rows');
+      var failed = 0;
+      function linksOf(list) {
+        var n = 0;
+        list.forEach(function (g) {
+          [g].concat(g.slots || []).forEach(function (o) { if (o.predecessorId) n++; });
+        });
+        return n;
+      }
+      function check(fx) {
+        var res = window.GanttCTFiles.read(JSON.parse(JSON.stringify(fx.file)));
+        var p = res.project, e = fx.expect, problems = [];
+        var got = {};
+        if (p.type === 'cycle') {
+          got.type = 'cycle';
+          got.sheets = p.sheets.length;
+          got.cycleTasks = p.sheets.reduce(function (n, s) { return n + s.tasks.length; }, 0);
+        } else {
+          got.type = 'gantt';
+          got.tasks = p.tasks.length;
+          got.people = (p.people || []).length;
+          got.slots = p.tasks.concat(p.people || []).reduce(function (n, g) { return n + (g.slots || []).length; }, 0);
+          got.links = linksOf(p.tasks) + linksOf(p.people || []);
+          got.firstLink = p.tasks.filter(function (t) { return t.predecessorId; }).map(function (t) { return t.link; })[0];
+          got.countSat = p.tasks[0] && p.tasks[0].countSat;
+          got.hiddenRanges = (p.hiddenRanges || []).length;
+          got.customHolidays = (p.customHolidays || []).length;
+          p.tasks.concat(p.people || []).forEach(function (g) {
+            [g].concat(g.slots || []).forEach(function (o) {
+              if (!/^\d{4}-\d{2}-\d{2}$/.test(o.start) || !/^\d{4}-\d{2}-\d{2}$/.test(o.end)) problems.push('date non valide in «' + g.name + '»');
+            });
+          });
+        }
+        got.newer = res.newer;
+        Object.keys(e).forEach(function (k) {
+          if (got[k] !== e[k]) problems.push(k + ': atteso ' + e[k] + ', ottenuto ' + got[k]);
+        });
+        return { ok: !problems.length, text: problems.length ? problems.join(' · ')
+          : 'versione ' + res.version + ' → ' + window.GanttCTFiles.formatVersion + ' · ' +
+            Object.keys(e).map(function (k) { return k + '=' + got[k]; }).join(', ') };
+      }
+      (window.COMPAT_FIXTURES || []).forEach(function (fx) {
+        var r;
+        try { r = check(fx); } catch (err) { r = { ok: false, text: 'errore: ' + (err && err.message ? err.message : err) }; }
+        if (!r.ok) failed++;
+        var tr = document.createElement('tr');
+        var a = document.createElement('td'); a.textContent = fx.label;
+        var b = document.createElement('td'); b.className = 'res ' + (r.ok ? 'ok' : 'ko'); b.textContent = r.ok ? 'OK' : 'ERRORE';
+        var c = document.createElement('td'); c.className = 'detail'; c.textContent = r.text;
+        tr.appendChild(a); tr.appendChild(b); tr.appendChild(c);
+        rows.appendChild(tr);
+      });
+      var total = (window.COMPAT_FIXTURES || []).length;
+      var s = document.getElementById('summary');
+      s.className = 'summary ' + (failed ? 'ko' : 'ok');
+      s.textContent = failed ? failed + ' su ' + total + ' file NON compatibili'
+        : 'Tutti i ' + total + ' file sono compatibili (formato attuale v' + window.GanttCTFiles.formatVersion + ', app ' + window.GanttCTFiles.appVersion + ')';
+      document.title = (failed ? 'ERRORE' : 'OK') + ' — compatibilità file GanttCT';
+    })();
+  </script>
+</body>
+</html>

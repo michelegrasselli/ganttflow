@@ -4,10 +4,12 @@ $ErrorActionPreference = 'Stop'
 $desktop  = [Environment]::GetFolderPath('Desktop')
 $programs = [Environment]::GetFolderPath('Programs')
 $targets = @(
+  (Join-Path $desktop 'GanttCT by MG V0.lnk'),
+  (Join-Path $programs 'GanttCT by MG V0.lnk'),
+  (Join-Path $env:LOCALAPPDATA 'GanttCT'),
+  # collegamenti e cartelle delle installazioni precedenti
   (Join-Path $desktop 'GanttCT by MG.lnk'),
   (Join-Path $programs 'GanttCT by MG.lnk'),
-  (Join-Path $env:LOCALAPPDATA 'GanttCT'),
-  # eventuale installazione con il vecchio nome
   (Join-Path $desktop 'GanttFlow.lnk'),
   (Join-Path $programs 'GanttFlow.lnk'),
   (Join-Path $env:LOCALAPPDATA 'GanttFlow')
