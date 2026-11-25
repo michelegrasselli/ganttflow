@@ -253,25 +253,69 @@ window.GanttPDF = (function () {
   }
 
   function prepare(project) {
-    var list = (project && Array.isArray(project.tasks) ? project.tasks : [])
-      .filter(function (t) { return t && parseISO(t.start) && parseISO(t.end); })
-      .map(function (t, i) {
-        return {
-          index: i,
-          id: t.id,
-          name: t.name || 'Task',
-          start: t.start,
-          end: t.end,
-          duration: Math.max(1, parseInt(t.duration, 10) || diffDays(t.start, t.end) + 1),
-          color: /^#[0-9a-fA-F]{6}$/.test(t.color || '') ? t.color : '#6366f1',
-          predecessorId: t.predecessorId || null,
-          link: LINK_LABEL[t.link] ? t.link : 'FS'
-        };
+    var groups = [];
+    function readNode(src) {
+      return {
+        id: src.id,
+        start: src.start,
+        end: src.end,
+        duration: Math.max(1, parseInt(src.duration, 10) || diffDays(src.start, src.end) + 1),
+        predecessorId: src.predecessorId || null,
+        link: LINK_LABEL[src.link] ? src.link : 'FS'
+      };
+    }
+    function addGroups(rawList, kind) {
+      (Array.isArray(rawList) ? rawList : []).forEach(function (g) {
+        if (!g || !parseISO(g.start) || !parseISO(g.end)) return;
+        var nodes = [readNode(g)];
+        (Array.isArray(g.slots) ? g.slots : []).forEach(function (s) {
+          if (s && parseISO(s.start) && parseISO(s.end)) nodes.push(readNode(s));
+        });
+        groups.push({
+          index: groups.length,
+          id: g.id,
+          no: '',
+          name: g.name || (kind === 'person' ? 'Person' : 'Task'),
+          kind: kind,
+          color: /^#[0-9a-fA-F]{6}$/.test(g.color || '') ? g.color : '#6366f1',
+          nodes: nodes
+        });
       });
+    }
+    addGroups(project && project.tasks, 'task');
+    addGroups(project && project.people, 'person');
+    var taskNo = 0, personNo = 0;
+    groups.forEach(function (g) {
+      g.no = g.kind === 'person' ? 'P' + (++personNo) : String(++taskNo);
+    });
+    /* i periodi stanno sulla stessa riga: solo quelli sovrapposti nel tempo
+       vengono affiancati su sotto-linee (come nel grafico a schermo) */
+    var nodePos = {};
+    groups.forEach(function (g, gi) {
+      var order = g.nodes.map(function (n, i) { return i; });
+      order.sort(function (a, b) {
+        return g.nodes[a].start < g.nodes[b].start ? -1 : (g.nodes[a].start > g.nodes[b].start ? 1 : a - b);
+      });
+      var ends = [];
+      var track = [];
+      order.forEach(function (i) {
+        var t = 0;
+        while (t < ends.length && !(g.nodes[i].start > ends[t])) t++;
+        ends[t] = g.nodes[i].end;
+        track[i] = t;
+      });
+      g.trackCount = Math.max(1, ends.length);
+      g.nodes.forEach(function (n, si) {
+        n.track = track[si];
+        nodePos[n.id] = { row: gi, slot: si, track: track[si], count: g.trackCount };
+      });
+    });
     var min = null, max = null;
-    list.forEach(function (t) {
-      if (!min || t.start < min) min = t.start;
-      if (!max || t.end > max) max = t.end;
+    groups.forEach(function (g) {
+      g.nodes.forEach(function (n) {
+        if (!min || n.start < min) min = n.start;
+        if (!max || n.end > max) max = n.end;
+      });
     });
     if (!min) min = max = todayISO();
     var start = startOfMonth(min);
@@ -297,11 +341,17 @@ window.GanttPDF = (function () {
     }
     var days = visibleDays.length;
     var pages = [];
-    if (!list.length) pages.push([]);
-    for (var i = 0; i < list.length; i += ROWS_PER_PAGE) pages.push(list.slice(i, i + ROWS_PER_PAGE));
+    if (!groups.length) pages.push([]);
+    for (var i = 0; i < groups.length; i += ROWS_PER_PAGE) pages.push(groups.slice(i, i + ROWS_PER_PAGE));
+    var slotCount = 0;
+    groups.forEach(function (g) { slotCount += g.nodes.length - 1; });
     return {
       project: project || {},
-      tasks: list,
+      groups: groups,
+      nodePos: nodePos,
+      taskCount: taskNo,
+      peopleCount: personNo,
+      slotCount: slotCount,
       start: start,
       end: end,
       allDays: allDays,
@@ -356,10 +406,16 @@ window.GanttPDF = (function () {
     var ops = [];
     var rows = data.pages[pageIndex] || [];
     var project = data.project || {};
-    var list = data.tasks;
+    var groups = data.groups;
     var colW = data.colW;
     var tlX = COL.timeline;
     var monthNames = MONTHS_SHORT;
+    var pageStart = pageIndex * ROWS_PER_PAGE;
+    function rowTop(rowIndex) { return ROWS_TOP - (rowIndex - pageStart + 1) * ROW_H; }
+    function nodeCenterY(p) {
+      var each = ROW_H / p.count;
+      return rowTop(p.row) + ROW_H - (p.track + 0.5) * each;
+    }
 
     /* sfondo zebrato */
     rows.forEach(function (t, i) {
@@ -370,17 +426,19 @@ window.GanttPDF = (function () {
     opsText(ops, M, 558, fit(project.name || 'Untitled project', PAGE_W - M * 2 - 150, 18, true), 18, { bold: true });
     var firstVisible = data.visibleDays.length ? data.visibleDays[0] : data.start;
     var lastVisible = data.visibleDays.length ? data.visibleDays[data.visibleDays.length - 1] : data.end;
-    var meta = list.length + (list.length === 1 ? ' task' : ' tasks') +
+    var meta = data.taskCount + (data.taskCount === 1 ? ' task' : ' tasks') +
+      (data.peopleCount ? '  ·  ' + data.peopleCount + (data.peopleCount === 1 ? ' person' : ' people') : '') +
+      (data.slotCount ? '  ·  ' + data.slotCount + ' extra period' + (data.slotCount === 1 ? '' : 's') : '') +
       '  ·  ' + fmtLong(firstVisible) + ' → ' + fmtLong(lastVisible) +
       '  ·  ' + data.days + ' days' +
       (data.hiddenCount ? '  ·  ' + data.hiddenCount + ' hidden days' : '') +
-      (list.length ? '  ·  generated ' + fmtNum(todayISO()) : '');
+      (groups.length ? '  ·  generated ' + fmtNum(todayISO()) : '');
     opsText(ops, M, 541, fit(meta, PAGE_W - M * 2, 8, false), 8, { color: MUTED });
     opsLine(ops, M, 530, PAGE_W - M, 530, 1, [0.88, 0.9, 0.94]);
 
     /* intestazione tabella */
     opsText(ops, COL.no, 519, '#', 6.5, { bold: true, color: MUTED });
-    opsText(ops, COL.name, 519, 'ACTIVITY', 6.5, { bold: true, color: MUTED });
+    opsText(ops, COL.name, 519, 'ACTIVITY / PERSON', 6.5, { bold: true, color: MUTED });
     opsText(ops, COL.durRight, 519, 'DAYS', 6.5, { bold: true, color: MUTED, align: 'right' });
     opsText(ops, COL.start, 519, 'START', 6.5, { bold: true, color: MUTED });
     opsText(ops, COL.end, 519, 'END', 6.5, { bold: true, color: MUTED });
@@ -428,57 +486,65 @@ window.GanttPDF = (function () {
       opsLine(ops, tlX + (ti + 0.5) * colW, ROWS_BOTTOM, tlX + (ti + 0.5) * colW, ROWS_TOP, 1, TODAY, '2 2');
     }
 
-    /* collegamenti */
-    var pos = {};
-    list.forEach(function (t, i) { pos[t.id] = i; });
-    var pageStart = pageIndex * ROWS_PER_PAGE;
-    rows.forEach(function (t, i) {
-      if (!t.predecessorId) return;
-      var pi = pos[t.predecessorId];
-      if (pi === undefined) return;
-      if (pi < pageStart || pi >= pageStart + rows.length) return;
-      var pred = list[pi];
-      var pStartX = xAt(data, pred.start);
-      var pEndX = xAt(data, addDays(pred.end, 1));
-      var tStartX = xAt(data, t.start);
-      var tEndX = xAt(data, addDays(t.end, 1));
-      var x1 = t.link === 'SS' ? pStartX : pEndX;
-      var x2 = t.link === 'FF' ? tEndX : tStartX;
-      var y1 = ROWS_TOP - (pi - pageStart + 0.5) * ROW_H;
-      var y2 = ROWS_TOP - (i + 0.5) * ROW_H;
-      var dash = t.link === 'SS' ? '[2 1.5] 0 d ' : (t.link === 'FF' ? '[1 1.5] 0 d ' : '');
-      var mid, path;
-      if (x2 - x1 >= 4) {
-        mid = x1 + Math.min(8, (x2 - x1) / 2);
-        path = num(x1) + ' ' + num(y1) + ' m ' + num(mid) + ' ' + num(y1) + ' l ' +
-          num(mid) + ' ' + num(y2) + ' l ' + num(x2 - 2) + ' ' + num(y2) + ' l';
-      } else {
-        mid = Math.max(tlX + 1, Math.min(x1, x2) - 6);
-        path = num(x1) + ' ' + num(y1) + ' m ' + num(mid) + ' ' + num(y1) + ' l ' +
-          num(mid) + ' ' + num(y2) + ' l ' + num(x2 - 2) + ' ' + num(y2) + ' l';
-      }
-      ops.push('q 0.45 0.5 0.6 RG 0.7 w ' + dash + path + ' S Q');
-      ops.push('q 0.45 0.5 0.6 rg ' + num(x2) + ' ' + num(y2) + ' m ' + num(x2 - 4) + ' ' + num(y2 + 1.8) + ' l ' +
-        num(x2 - 4) + ' ' + num(y2 - 1.8) + ' l f Q');
+    /* collegamenti (tra singoli periodi, anche sulla stessa riga) */
+    rows.forEach(function (g, i) {
+      g.nodes.forEach(function (t) {
+        if (!t.predecessorId) return;
+        var tp = data.nodePos[t.id];
+        var pp = data.nodePos[t.predecessorId];
+        if (!tp || !pp) return;
+        if (pp.row < pageStart || pp.row >= pageStart + rows.length) return;
+        var pred = data.groups[pp.row].nodes[pp.slot];
+        var pStartX = xAt(data, pred.start);
+        var pEndX = xAt(data, addDays(pred.end, 1));
+        var tStartX = xAt(data, t.start);
+        var tEndX = xAt(data, addDays(t.end, 1));
+        var x1 = t.link === 'SS' ? pStartX : pEndX;
+        var x2 = t.link === 'FF' ? tEndX : tStartX;
+        var y1 = nodeCenterY(pp);
+        var y2 = nodeCenterY(tp);
+        var dash = t.link === 'SS' ? '[2 1.5] 0 d ' : (t.link === 'FF' ? '[1 1.5] 0 d ' : '');
+        var mid, path;
+        if (x2 - x1 >= 4) {
+          mid = x1 + Math.min(8, (x2 - x1) / 2);
+          path = num(x1) + ' ' + num(y1) + ' m ' + num(mid) + ' ' + num(y1) + ' l ' +
+            num(mid) + ' ' + num(y2) + ' l ' + num(x2 - 2) + ' ' + num(y2) + ' l';
+        } else {
+          mid = Math.max(tlX + 1, Math.min(x1, x2) - 6);
+          path = num(x1) + ' ' + num(y1) + ' m ' + num(mid) + ' ' + num(y1) + ' l ' +
+            num(mid) + ' ' + num(y2) + ' l ' + num(x2 - 2) + ' ' + num(y2) + ' l';
+        }
+        ops.push('q 0.45 0.5 0.6 RG 0.7 w ' + dash + path + ' S Q');
+        ops.push('q 0.45 0.5 0.6 rg ' + num(x2) + ' ' + num(y2) + ' m ' + num(x2 - 4) + ' ' + num(y2 + 1.8) + ' l ' +
+          num(x2 - 4) + ' ' + num(y2 - 1.8) + ' l f Q');
+      });
     });
 
-    /* righe */
-    rows.forEach(function (t, i) {
-      var top = ROWS_TOP - (i + 1) * ROW_H;
+    /* righe: una riga per attività/persona, con tutti i periodi sulla stessa riga */
+    rows.forEach(function (g, i) {
+      var top = rowTop(pageStart + i);
       var cy = top + ROW_H / 2;
-      var idx = pageStart + i + 1;
-      opsText(ops, COL.no, cy - 2.2, String(idx), 6.5, { color: [0.6, 0.66, 0.75] });
-      opsText(ops, COL.name, cy - 2.4, fit(t.name, COL.nameW, 7.5, false), 7.5, { bold: false });
-      opsText(ops, COL.durRight, cy - 2.4, String(t.duration), 7.5, { align: 'right' });
-      opsText(ops, COL.start, cy - 2.4, fmtNumShort(t.start), 7);
-      opsText(ops, COL.end, cy - 2.4, fmtNumShort(t.end), 7);
-      var pi = t.predecessorId ? pos[t.predecessorId] : undefined;
-      if (pi !== undefined) opsText(ops, COL.after, cy - 2.4, (LINK_LABEL[t.link] || 'after') + ' #' + (pi + 1), 7, { color: MUTED, align: 'right' });
+      var primary = g.nodes[0];
+      opsText(ops, COL.no, cy - 2.2, g.no, 6.5, { color: [0.6, 0.66, 0.75] });
+      var label = (g.kind === 'person' ? '(P) ' : '') + g.name +
+        (g.nodes.length > 1 ? '  [' + g.nodes.length + ' periods]' : '');
+      opsText(ops, COL.name, cy - 2.4, fit(label, COL.nameW, 7.5, false), 7.5, { bold: g.kind === 'person' });
+      opsText(ops, COL.durRight, cy - 2.4, String(primary.duration), 7.5, { align: 'right' });
+      opsText(ops, COL.start, cy - 2.4, fmtNumShort(primary.start), 7);
+      opsText(ops, COL.end, cy - 2.4, fmtNumShort(primary.end), 7);
+      var pp = primary.predecessorId ? data.nodePos[primary.predecessorId] : undefined;
+      if (pp) opsText(ops, COL.after, cy - 2.4, (LINK_LABEL[primary.link] || 'after') + ' ' + data.groups[pp.row].no, 7, { color: MUTED, align: 'right' });
 
-      var x = xAt(data, t.start);
-      var bw = Math.max(1.4, visibleSpan(data, t.start, t.end) * colW);
-      var c = hexRgb(t.color);
-      opsRect(ops, x, cy - 4.5, bw, 9, c, [Math.max(0, c[0] - .18), Math.max(0, c[1] - .18), Math.max(0, c[2] - .18)]);
+      var each = ROW_H / g.trackCount;
+      var barH = Math.max(2.6, Math.min(9, each - 1.4));
+      var c = hexRgb(g.color);
+      var stroke = [Math.max(0, c[0] - .18), Math.max(0, c[1] - .18), Math.max(0, c[2] - .18)];
+      g.nodes.forEach(function (t) {
+        var y = top + ROW_H - (t.track + 0.5) * each;
+        var x = xAt(data, t.start);
+        var bw = Math.max(1.4, visibleSpan(data, t.start, t.end) * colW);
+        opsRect(ops, x, y - barH / 2, bw, barH, c, stroke);
+      });
     });
 
     /* piè di pagina */
@@ -492,9 +558,15 @@ window.GanttPDF = (function () {
       opsRect(ops, 490, 20, 7, 7, [0.94, 0.95, 0.97], [0.82, 0.85, 0.9]);
       opsText(ops, 501, 23, 'hidden period', 6.5, { color: MUTED });
     }
+    var legendX = data.hiddenCount ? 548 : 490;
+    if (data.peopleCount) {
+      opsText(ops, legendX, 23, '(P) = person', 6.5, { color: MUTED });
+      legendX += 66;
+    }
+    if (data.slotCount) opsText(ops, legendX, 23, '[n periods] = same row, several date ranges', 6.5, { color: MUTED });
     opsText(ops, PAGE_W - M, 23, 'Page ' + (pageIndex + 1) + ' of ' + pageCount, 7, { color: MUTED, align: 'right' });
-    if (!list.length) {
-      opsText(ops, PAGE_W / 2, 300, 'No activities in this project', 12, { color: MUTED, align: 'center' });
+    if (!data.groups.length) {
+      opsText(ops, PAGE_W / 2, 300, 'No activities or people in this project', 12, { color: MUTED, align: 'center' });
     }
     return ops.join('\n') + '\n';
   }

@@ -1,8 +1,10 @@
 # GanttCT by MG
 
 Pianificatore di attività con diagramma di Gantt, dipendenze automatiche,
-esportazione PDF e file di progetto reimportabile. Include anche un grafico di
-**stima del tempo ciclo** in secondi, organizzato in più pagine.
+esportazione PDF e file di progetto reimportabile. Nel Gantt ogni attività può avere
+**più periodi di date sulla stessa riga** e, sotto le attività, c'è la
+**pianificazione delle persone**. Include anche un grafico di **stima del tempo ciclo**
+in secondi, organizzato in più pagine.
 
 Con **Nuovo** si sceglie il tipo di lavoro da creare:
 
@@ -186,8 +188,41 @@ adatti allo zoom (da 0,1 s in su).
 ### Selezionare ed eliminare dal grafico
 
 Un clic su una barra seleziona l'attività (evidenziata anche nella tabella). Premi
-**Canc** per eliminarla: un messaggio offre **Annulla**. Mentre stai scrivendo in un
+**Canc** per eliminarla: un messaggio offre **Annulla**. Se la barra cliccata è un
+periodo aggiuntivo, Canc rimuove solo quel periodo. Mentre stai scrivendo in un
 campo, Canc agisce solo sul testo. **Esc** toglie la selezione.
+
+### Più periodi per la stessa attività
+
+Un'attività può svolgersi in più intervalli, per esempio dal 1 al 10 gennaio e poi
+dal 16 al 17 gennaio. Premi il pulsante **+** accanto al nome: sotto la riga compare una
+riga rientrata **↳ Periodo 2** con le sue date di inizio e fine, la sua durata e il suo
+vincolo. Si possono aggiungere fino a 20 periodi per riga.
+
+- Nel grafico **tutti i periodi stanno sulla stessa riga** dell'attività, con lo stesso
+  colore; i periodi aggiuntivi hanno una leggera trama a righe e il numero del periodo.
+  Se due periodi si sovrappongono nel tempo, la riga si divide in sotto-linee per
+  mostrarli entrambi.
+- Ogni periodo si comporta **come un'attività separata** per i vincoli: nel menu
+  «Vincolo» compare come «Nome attività · periodo 2», si collega trascinando dai suoi
+  pallini sul grafico, si sposta trascinando la sua barra e altre attività possono
+  dipendere da lui.
+- Le spunte Sab/Dom/Fest e il colore sono quelli della riga principale.
+- Il cestino sulla riga del periodo (o Canc dopo averne cliccato la barra) lo rimuove,
+  con **Annulla**; `Alt` + `↑`/`↓` sulla riga del periodo ne cambia l'ordine.
+
+### Pianificazione delle persone
+
+Sotto le attività c'è la sezione **Persone**: con **+ Persona** si aggiunge una persona,
+con le stesse colonne delle attività (date, durata, vincolo, colore, Sab/Dom/Fest).
+Nel grafico le persone compaiono sotto le attività, separate da una fascia viola.
+
+- Anche le persone possono avere **più periodi** con il pulsante **+**, tutti sulla
+  stessa riga del grafico.
+- I vincoli delle persone collegano persone e loro periodi tra loro; attività e
+  persone restano due pianificazioni distinte.
+- Spostamento, selezione, Canc, duplicazione, riordino e PDF funzionano come per le
+  attività.
 
 ### Riordinare le attività
 
@@ -252,7 +287,7 @@ righello dei secondi e linea del tempo ciclo.
 | `Ctrl`/`⌘` + rotella | Zoom del diagramma |
 | `Invio` | Conferma il campo in modifica |
 | `Esc` | Annulla la modifica / chiude la finestra / toglie la selezione |
-| `Canc` | Elimina l'attività selezionata sul grafico (con Annulla) |
+| `Canc` | Elimina l'attività, la persona o il singolo periodo selezionato sul grafico (con Annulla) |
 
 ## Formato del progetto
 
@@ -261,7 +296,7 @@ Il file esportato è JSON e può essere reimportato con il pulsante **Importa**:
 ```json
 {
   "format": "ganttflow-project",
-  "version": 3,
+  "version": 5,
   "exportedAt": "2026-11-11T09:30:00.000Z",
   "project": {
     "name": "Lancio nuovo sito web",
@@ -286,12 +321,46 @@ Il file esportato è JSON e può essere reimportato con il pulsante **Importa**:
         "lag": 0,
         "countSat": false,
         "countSun": false,
-        "countHol": false
+        "countHol": false,
+        "slots": [
+          {
+            "id": "s4k2m9x1abc",
+            "start": "2027-01-16",
+            "end": "2027-01-17",
+            "duration": 2,
+            "predecessorId": null,
+            "link": "FS",
+            "lag": 0
+          }
+        ]
+      }
+    ],
+    "people": [
+      {
+        "id": "t9e1p3rsn01",
+        "name": "Giulia Rossi",
+        "start": "2026-11-16",
+        "end": "2026-11-27",
+        "duration": 10,
+        "color": "#a855f7",
+        "predecessorId": null,
+        "link": "FS",
+        "lag": 0,
+        "countSat": false,
+        "countSun": false,
+        "countHol": false,
+        "slots": []
       }
     ]
   }
 }
 ```
+
+- `slots` contiene i periodi aggiuntivi della riga (il primo periodo resta nei campi
+  principali). Ogni periodo ha un proprio `id` e un proprio vincolo.
+- `people` ha la stessa struttura di `tasks`. I `predecessorId` puntano a righe o
+  periodi dello stesso elenco. I file senza `slots` o `people` (versioni precedenti)
+  si importano normalmente.
 
 - Le date usano il formato `YYYY-MM-DD` e sono giorni di calendario inclusivi.
 - `predecessorId` è `null` o l'id di un'altra attività dello stesso progetto.

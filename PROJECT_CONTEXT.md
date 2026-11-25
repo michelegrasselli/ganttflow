@@ -138,6 +138,25 @@ reimportabile.
 - Clic su una barra = selezione; **Canc** (Backspace su Mac) elimina la selezionata se il
   fuoco non è in un campo; **Esc** toglie la selezione.
 
+### 2.5.4 Periodi multipli (slot) e pianificazione persone (solo Gantt)
+- Ogni riga (attività o persona) è un gruppo: il primo periodo usa i campi della riga,
+  gli altri stanno in `slots[]` (id, start, end, duration, predecessorId, link, lag;
+  max 20). Colore e spunte Sab/Dom/Fest sono della riga.
+- Ogni periodo è un **nodo** autonomo (`ganttNodes()`, `nodeById()`): `recalc()` ordina
+  topologicamente i nodi, quindi un periodo può avere un proprio vincolo ed essere
+  predecessore di altri. I vincoli restano all'interno dello stesso elenco
+  (attività con attività, persone con persone).
+- Tabella: pulsante **+** sul nome → riga rientrata «↳ Periodo N» con date, durata e
+  vincolo propri. Grafico: tutte le barre del gruppo sulla riga principale
+  (`assignTracks()`: periodi sovrapposti su sotto-linee); i periodi aggiuntivi hanno
+  trama a righe. Pallini di vincolo, maniglia e selezione lavorano per periodo
+  (`data-node`); Canc su un periodo aggiuntivo rimuove solo quello.
+- `project.people[]` con la stessa struttura di `tasks[]`, mostrato sotto le attività
+  nella sezione «Persone» (+ Persona). PDF: persone «(P)» dopo le attività, periodi sulla
+  stessa riga, «[n periods]» nel nome.
+- Titolo nella barra in alto: «GanttCT by Michele Grasselli» (font Bahnschrift,
+  incluso in Windows 10/11, con alternative).
+
 ### 2.5.1 Riordino attività
 - Maniglia (⋮⋮) visibile al passaggio sul bordo sinistro della riga: trascinando si
   sposta l'attività sopra/sotto le altre (linea guida blu, scorrimento automatico ai
@@ -307,7 +326,13 @@ Icona.png           immagine sorgente dell’icona
 | Tempo ciclo misurato dal secondo 0 | Un ritardo iniziale fa parte del ciclo; coerente con il righello che parte da 0. |
 | Autosalvataggio locale | L'utente non deve perdere il lavoro chiudendo il browser. |
 
-## 6. Stato attuale (v1.8)
+## 6. Stato attuale (v2.0)
+
+Novità v2.0: periodi multipli per attività sulla stessa riga del Gantt, ciascuno con
+vincoli propri; sezione Persone sotto le attività (anch'esse con periodi multipli);
+titolo «GanttCT by Michele Grasselli»; PDF aggiornato.
+
+Novità v1.9: nome «GanttCT by MG» e icona dell'applicazione.
 
 Novità v1.8: spostamento delle attività nel tempo trascinando le barre (con
 aggiornamento di offset e dipendenti), selezione dal grafico ed eliminazione con Canc

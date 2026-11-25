@@ -28,11 +28,13 @@
   var MAX_DURATION = 3650;
   var MAX_HIDDEN = 50;
   var MAX_CUSTOM = 200;
-  var COL_MIN = [80, 34, 76, 76, 118, 36, 54, 48];
+  var MAX_SLOTS = 20;
+  var MAX_PEOPLE = 100;
+  var COL_MIN = [110, 34, 76, 76, 118, 36, 54, 48];
   var COL_MAX = [640, 160, 260, 260, 420, 120, 180, 120];
   /* Configurazione colonne per tipo di lavoro (Gantt / tempo ciclo). */
   var COLS = {
-    gantt: { min: COL_MIN, max: COL_MAX, def: [121, 46, 104, 104, 168, 44, 64, 60], key: 'ganttflow.layout.v1' },
+    gantt: { min: COL_MIN, max: COL_MAX, def: [172, 46, 104, 104, 168, 44, 64, 60], key: 'ganttflow.layout.v2' },
     cycle: {
       min: [80, 40, 48, 48, 118, 36, 48],
       max: [640, 160, 200, 200, 420, 120, 120],
@@ -305,6 +307,9 @@
   function uid() {
     return 't' + Date.now().toString(36).slice(-4) + Math.random().toString(36).slice(2, 8);
   }
+  function slotUid() {
+    return 's' + Date.now().toString(36).slice(-4) + Math.random().toString(36).slice(2, 8);
+  }
   function el(tag, cls, text) {
     var node = document.createElement(tag);
     if (cls) node.className = cls;
@@ -379,6 +384,7 @@
       createdAt: now,
       updatedAt: now,
       tasks: tasks || [],
+      people: [],
       hiddenRanges: [],
       customHolidays: []
     };
@@ -401,7 +407,8 @@
       lag: 0,
       countSat: false,
       countSun: false,
-      countHol: false
+      countHol: false,
+      slots: []
     };
     if (partial) Object.keys(partial).forEach(function (k) { if (partial[k] !== undefined) t[k] = partial[k]; });
     t.countSat = t.countSat === true;
@@ -411,7 +418,91 @@
     t.start = nextCounted(t.start, t);
     t.duration = clampInt(t.duration, 1, MAX_DURATION, 1);
     if (!isISO(t.end)) t.end = endFromStart(t.start, t.duration, t);
+    if (!Array.isArray(t.slots)) t.slots = [];
     return t;
+  }
+
+  /* Un periodo aggiuntivo della stessa attività o persona. Il primo periodo
+     resta nei campi principali della riga; gli altri vivono in `slots`. */
+  function makeSlot(partial) {
+    var s = {
+      id: slotUid(),
+      start: todayISO(),
+      end: todayISO(),
+      duration: 1,
+      predecessorId: null,
+      link: 'FS',
+      lag: 0
+    };
+    if (partial) Object.keys(partial).forEach(function (k) { if (partial[k] !== undefined) s[k] = partial[k]; });
+    if (!isISO(s.start)) s.start = todayISO();
+    s.duration = clampInt(s.duration, 1, MAX_DURATION, 1);
+    if (!isISO(s.end)) s.end = endFromStart(s.start, s.duration, s);
+    s.link = LINK_TYPES[s.link] ? s.link : 'FS';
+    s.lag = clampInt(s.lag, 0, 365, 0);
+    return s;
+  }
+
+  function makePerson(partial) {
+    var p = makeTask(partial);
+    p.id = uid();
+    p.name = 'Nuova persona';
+    p.slots = [];
+    if (partial) Object.keys(partial).forEach(function (k) { if (partial[k] !== undefined) p[k] = partial[k]; });
+    if (!Array.isArray(p.slots)) p.slots = [];
+    return p;
+  }
+
+  function people() {
+    return state.project && !isCycle() && Array.isArray(state.project.people) ? state.project.people : [];
+  }
+
+  /* Tutte le righe principali (attività e persone) del Gantt. */
+  function groupList(kind) {
+    if (kind === 'person') return people();
+    if (kind === 'task') return tasks();
+    return tasks().concat(people());
+  }
+
+  function groupById(id) {
+    var list = groupList();
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+    return null;
+  }
+
+  function groupKind(group) {
+    if (!group) return 'task';
+    return people().indexOf(group) >= 0 ? 'person' : 'task';
+  }
+
+  function slotsOf(group) {
+    return group && Array.isArray(group.slots) ? group.slots : [];
+  }
+
+  /* Nodi temporali: il periodo principale (id = id della riga) più gli slot. */
+  function ganttNodes(kind) {
+    var out = [];
+    groupList(kind).forEach(function (g) {
+      var k = groupKind(g);
+      out.push({ obj: g, owner: g, kind: k, slotIndex: 0, slot: null });
+      slotsOf(g).forEach(function (s, i) {
+        out.push({ obj: s, owner: g, kind: k, slotIndex: i + 1, slot: s });
+      });
+    });
+    return out;
+  }
+
+  function nodeById(id) {
+    var list = ganttNodes();
+    for (var i = 0; i < list.length; i++) if (list[i].obj.id === id) return list[i];
+    return null;
+  }
+
+  function slotIdSet(group) {
+    var set = {};
+    set[group.id] = true;
+    slotsOf(group).forEach(function (s) { set[s.id] = true; });
+    return set;
   }
 
   function isCycle() { return !!state.project && state.project.type === 'cycle'; }
@@ -461,74 +552,98 @@
   function wouldCycle(taskId, predId) {
     var guard = 0;
     var cur = predId;
-    while (cur && guard++ < MAX_TASKS + 1) {
+    while (cur && guard++ < MAX_TASKS + MAX_PEOPLE + 1) {
       if (cur === taskId) return true;
-      var t = taskById(cur);
-      cur = t ? t.predecessorId : null;
+      var n = nodeById(cur);
+      cur = n ? n.obj.predecessorId : null;
     }
     return false;
   }
 
-  /* Ricostruisce durate, date e catene di dipendenza in ordine topologico. */
+  function normalizeNodeDates(obj, owner) {
+    obj.link = LINK_TYPES[obj.link] ? obj.link : 'FS';
+    obj.lag = clampInt(obj.lag, 0, 365, 0);
+    obj.duration = clampInt(obj.duration, 1, MAX_DURATION, 1);
+    if (!isISO(obj.start)) obj.start = todayISO();
+    if (!isISO(obj.end)) obj.end = endFromStart(obj.start, obj.duration, owner);
+  }
+
+  /* Ricostruisce durate, date e catene di dipendenza in ordine topologico.
+     Attività e persone sono gruppi con uno o più periodi (slot): ogni
+     periodo è un nodo autonomo e può avere un proprio vincolo. */
   function recalc() {
     if (isCycle()) { recalcCycle(); return; }
-    var list = tasks();
-    if (!list.length) return;
     rebuildHolidayIndex();
-    var map = {};
-    list.forEach(function (t) { map[t.id] = t; });
+    var groups = groupList();
+    if (!groups.length) return;
 
-    list.forEach(function (t) {
-      t.countSat = t.countSat === true;
-      t.countSun = t.countSun === true;
-      t.countHol = t.countHol === true;
-      if (!isISO(t.start)) t.start = todayISO();
-      if (!isISO(t.end)) t.end = endFromStart(t.start, Math.max(1, t.duration), t);
-      t.duration = clampInt(t.duration, 1, MAX_DURATION, 1);
-      t.lag = clampInt(t.lag, 0, 365, 0);
-      t.link = LINK_TYPES[t.link] ? t.link : 'FS';
-      t.color = hexColor(t.color) || '#6366f1';
-      t.name = typeof t.name === 'string' ? t.name : 'Attività';
-      if (t.predecessorId && !map[t.predecessorId]) t.predecessorId = null;
-      if (t.predecessorId === t.id) t.predecessorId = null;
+    groups.forEach(function (g) {
+      g.countSat = g.countSat === true;
+      g.countSun = g.countSun === true;
+      g.countHol = g.countHol === true;
+      g.color = hexColor(g.color) || '#6366f1';
+      g.name = typeof g.name === 'string' ? g.name : 'Senza nome';
+      if (!Array.isArray(g.slots)) g.slots = [];
+      normalizeNodeDates(g, g);
+      g.slots.forEach(function (s) { normalizeNodeDates(s, g); });
     });
 
-    var visited = {};
-    var order = [];
-    function visit(t, stack) {
-      if (visited[t.id]) return;
-      if (stack[t.id]) { t.predecessorId = null; return; }
-      stack[t.id] = true;
-      if (t.predecessorId && map[t.predecessorId]) visit(map[t.predecessorId], stack);
-      delete stack[t.id];
-      visited[t.id] = true;
-      order.push(t);
-    }
-    list.forEach(function (t) { visit(t, {}); });
-
-    order.forEach(function (t) {
-      t.duration = clampInt(t.duration, 1, MAX_DURATION, 1);
-      if (t.predecessorId && map[t.predecessorId]) {
-        var p = map[t.predecessorId];
-        if (t.link === 'SS') {
-          t.start = nextCounted(addDays(p.start, t.lag), t);
-          t.end = endFromStart(t.start, t.duration, t);
-        } else if (t.link === 'FF') {
-          t.end = prevCounted(addDays(p.end, -(1 + t.lag)), t);
-          t.start = startFromEnd(t.end, t.duration, t);
-        } else {
-          t.start = nextCounted(addDays(p.end, 1 + t.lag), t);
-          t.end = endFromStart(t.start, t.duration, t);
-        }
-      } else {
-        t.start = nextCounted(t.start, t);
-        t.end = endFromStart(t.start, t.duration, t);
+    var nodes = ganttNodes();
+    var map = {};
+    nodes.forEach(function (n) { map[n.obj.id] = n; });
+    nodes.forEach(function (n) {
+      var o = n.obj;
+      if (o.predecessorId) {
+        var p = map[o.predecessorId];
+        if (!p || p.kind !== n.kind || o.predecessorId === o.id) o.predecessorId = null;
       }
+    });
+
+    ['task', 'person'].forEach(function (kind) {
+      var kindNodes = nodes.filter(function (n) { return n.kind === kind; });
+      if (!kindNodes.length) return;
+      var kindMap = {};
+      kindNodes.forEach(function (n) { kindMap[n.obj.id] = n; });
+
+      var visited = {};
+      var order = [];
+      function visit(n, stack) {
+        if (visited[n.obj.id]) return;
+        if (stack[n.obj.id]) { n.obj.predecessorId = null; return; }
+        stack[n.obj.id] = true;
+        if (n.obj.predecessorId && kindMap[n.obj.predecessorId]) visit(kindMap[n.obj.predecessorId], stack);
+        delete stack[n.obj.id];
+        visited[n.obj.id] = true;
+        order.push(n);
+      }
+      kindNodes.forEach(function (n) { visit(n, {}); });
+
+      order.forEach(function (n) {
+        var o = n.obj;
+        var g = n.owner;
+        o.duration = clampInt(o.duration, 1, MAX_DURATION, 1);
+        if (o.predecessorId && kindMap[o.predecessorId]) {
+          var p = kindMap[o.predecessorId].obj;
+          if (o.link === 'SS') {
+            o.start = nextCounted(addDays(p.start, o.lag), g);
+            o.end = endFromStart(o.start, o.duration, g);
+          } else if (o.link === 'FF') {
+            o.end = prevCounted(addDays(p.end, -(1 + o.lag)), g);
+            o.start = startFromEnd(o.end, o.duration, g);
+          } else {
+            o.start = nextCounted(addDays(p.end, 1 + o.lag), g);
+            o.end = endFromStart(o.start, o.duration, g);
+          }
+        } else {
+          o.start = nextCounted(o.start, g);
+          o.end = endFromStart(o.start, o.duration, g);
+        }
+      });
     });
   }
 
   function sanitizeProject(raw) {
-    if (!raw || typeof raw !== 'object' || !Array.isArray(raw.tasks)) {
+    if (!raw || typeof raw !== 'object' || (!Array.isArray(raw.tasks) && !Array.isArray(raw.people))) {
       throw new Error('Formato non valido: manca l\'elenco delle attività.');
     }
     var now = new Date().toISOString();
@@ -539,6 +654,7 @@
       createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : now,
       updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : now,
       tasks: [],
+      people: [],
       hiddenRanges: normalizeHiddenRanges(raw.hiddenRanges),
       customHolidays: customs
     };
@@ -546,16 +662,14 @@
     customHolidayIndex = customIndexFrom(customs);
     try {
       var ids = {};
-      raw.tasks.slice(0, MAX_TASKS).forEach(function (src, i) {
-        if (!src || typeof src !== 'object') return;
-        var id = typeof src.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(src.id) ? src.id : uid();
+      function nextId(candidate) {
+        var id = typeof candidate === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(candidate) && !ids[candidate]
+          ? candidate : uid();
         while (ids[id]) id = uid();
         ids[id] = true;
-        var flags = {
-          countSat: src.countSat === true,
-          countSun: src.countSun === true,
-          countHol: src.countHol === true
-        };
+        return id;
+      }
+      function readNode(src, flags) {
         var start = nextCounted(isISO(src.start) ? src.start : todayISO(), flags);
         var duration = clampInt(src.duration, 1, MAX_DURATION, 0);
         var end = isISO(src.end) ? prevCounted(src.end, flags) : null;
@@ -565,26 +679,76 @@
             : 1;
         }
         if (!end || diffDays(start, end) < 0) end = endFromStart(start, duration, flags);
-        project.tasks.push({
-          id: id,
-          name: typeof src.name === 'string' && src.name.trim() ? src.name.trim().slice(0, 120) : 'Attività ' + (i + 1),
+        return {
           start: start,
           end: end,
           duration: duration,
-          color: hexColor(src.color) || PALETTE[i % PALETTE.length],
           predecessorId: typeof src.predecessorId === 'string' ? src.predecessorId : null,
           link: LINK_TYPES[src.link] ? src.link : 'FS',
-          lag: clampInt(src.lag, 0, 365, 0),
+          lag: clampInt(src.lag, 0, 365, 0)
+        };
+      }
+      function readGroup(src, i, kind) {
+        if (!src || typeof src !== 'object') return null;
+        var flags = {
+          countSat: src.countSat === true,
+          countSun: src.countSun === true,
+          countHol: src.countHol === true
+        };
+        var node = readNode(src, flags);
+        var group = {
+          id: nextId(src.id),
+          name: typeof src.name === 'string' && src.name.trim()
+            ? src.name.trim().slice(0, 120)
+            : (kind === 'person' ? 'Persona ' : 'Attività ') + (i + 1),
+          start: node.start,
+          end: node.end,
+          duration: node.duration,
+          color: hexColor(src.color) || PALETTE[i % PALETTE.length],
+          predecessorId: node.predecessorId,
+          link: node.link,
+          lag: node.lag,
           countSat: flags.countSat,
           countSun: flags.countSun,
-          countHol: flags.countHol
+          countHol: flags.countHol,
+          slots: []
+        };
+        (Array.isArray(src.slots) ? src.slots : []).slice(0, MAX_SLOTS).forEach(function (ss) {
+          if (!ss || typeof ss !== 'object') return;
+          var sn = readNode(ss, flags);
+          group.slots.push({
+            id: nextId(ss.id),
+            start: sn.start,
+            end: sn.end,
+            duration: sn.duration,
+            predecessorId: sn.predecessorId,
+            link: sn.link,
+            lag: sn.lag
+          });
         });
+        return group;
+      }
+      (Array.isArray(raw.tasks) ? raw.tasks : []).slice(0, MAX_TASKS).forEach(function (src, i) {
+        var g = readGroup(src, i, 'task');
+        if (g) project.tasks.push(g);
       });
-      var byId = {};
-      project.tasks.forEach(function (t) { byId[t.id] = t; });
-      project.tasks.forEach(function (t) {
-        if (t.predecessorId && !byId[t.predecessorId]) t.predecessorId = null;
-        if (t.predecessorId === t.id) t.predecessorId = null;
+      (Array.isArray(raw.people) ? raw.people : []).slice(0, MAX_PEOPLE).forEach(function (src, i) {
+        var g = readGroup(src, i, 'person');
+        if (g) project.people.push(g);
+      });
+      /* I vincoli restano all'interno dello stesso elenco (attività o persone). */
+      [project.tasks, project.people].forEach(function (list) {
+        var set = {};
+        list.forEach(function (g) {
+          set[g.id] = true;
+          g.slots.forEach(function (s) { set[s.id] = true; });
+        });
+        list.forEach(function (g) {
+          [g].concat(g.slots).forEach(function (o) {
+            if (o.predecessorId && !set[o.predecessorId]) o.predecessorId = null;
+            if (o.predecessorId === o.id) o.predecessorId = null;
+          });
+        });
       });
     } finally {
       customHolidayIndex = previousIndex;
@@ -622,11 +786,26 @@
     var p = makeProject('Lancio nuovo sito web', list);
     state.project = p;
     recalc();
+    /* esempio di periodo aggiuntivo sulla stessa attività */
+    list[3].slots.push(makeSlot({ start: addDays(list[3].end, 7), duration: 4 }));
+    /* pianificazione delle persone, con periodi multipli */
+    var person1 = makePerson({ name: 'Giulia Rossi', start: addDays(start, 0), duration: 10, color: '#a855f7' });
+    person1.slots.push(makeSlot({ start: addDays(start, 21), duration: 4 }));
+    var person2 = makePerson({ name: 'Marco Bianchi', start: addDays(start, 7), duration: 12, color: '#0ea5e9' });
+    var person3 = makePerson({ name: 'Sara Conti', start: addDays(start, 25), duration: 5, color: '#ef4444' });
+    person3.slots.push(makeSlot({ start: addDays(start, 37), duration: 2 }));
+    p.people = [person1, person2, person3];
+    recalc();
     return p;
   }
 
   function countLinks() {
-    return tasks().filter(function (t) { return t.predecessorId && taskById(t.predecessorId); }).length;
+    var nodes = ganttNodes();
+    var ids = {};
+    nodes.forEach(function (n) { ids[n.obj.id] = true; });
+    var count = 0;
+    nodes.forEach(function (n) { if (n.obj.predecessorId && ids[n.obj.predecessorId]) count++; });
+    return count;
   }
 
   /* ============================================================
@@ -867,7 +1046,7 @@
     if (p.type === 'cycle') {
       return (p.sheets || []).reduce(function (n, s) { return n + (s.tasks ? s.tasks.length : 0); }, 0);
     }
-    return Array.isArray(p.tasks) ? p.tasks.length : 0;
+    return (Array.isArray(p.tasks) ? p.tasks.length : 0) + (Array.isArray(p.people) ? p.people.length : 0);
   }
 
   function demoCycleProject() {
@@ -959,7 +1138,11 @@
     headerRow = head;
     grid.appendChild(head);
 
-    tasks().forEach(function (t) { grid.appendChild(cyc ? buildCycleRow(t) : buildTaskRow(t)); });
+    tasks().forEach(function (t) {
+      if (cyc) { grid.appendChild(buildCycleRow(t)); return; }
+      grid.appendChild(buildTaskRow(t));
+      slotsOf(t).forEach(function (s, i) { grid.appendChild(buildSlotRow(t, s, i)); });
+    });
 
     var addRow = el('div', 'row add-row');
     var addFields = el('div', 'fields');
@@ -970,10 +1153,39 @@
     addRow.appendChild(el('div', 'timeline'));
     grid.appendChild(addRow);
 
+    if (!cyc) {
+      grid.appendChild(buildPeopleSection());
+      people().forEach(function (p) {
+        grid.appendChild(buildGroupRow(p, 'person'));
+        slotsOf(p).forEach(function (s, i) { grid.appendChild(buildSlotRow(p, s, i)); });
+      });
+    }
+
     linksSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     linksSvg.setAttribute('class', 'links');
     linksSvg.setAttribute('aria-hidden', 'true');
     grid.appendChild(linksSvg);
+  }
+
+  function buildPeopleSection() {
+    var row = el('div', 'row section');
+    row.dataset.kind = 'person';
+    var fields = el('div', 'fields section-fields');
+    var title = el('span', 'section-title', 'Persone');
+    title.title = 'Pianificazione delle persone: date multiple e vincoli separati, come per le attività.';
+    fields.appendChild(title);
+    fields.appendChild(el('span', 'section-hint', people().length
+      ? people().length + (people().length === 1 ? ' persona' : ' persone')
+      : 'Nessuna persona pianificata'));
+    var add = el('button', 'section-add');
+    add.type = 'button';
+    add.dataset.action = 'add-person';
+    add.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span>Persona</span>';
+    add.title = 'Aggiungi una persona da pianificare';
+    fields.appendChild(add);
+    row.appendChild(fields);
+    row.appendChild(el('div', 'timeline'));
+    return row;
   }
 
   function colCfg() { return isCycle() ? COLS.cycle : COLS.gantt; }
@@ -1102,23 +1314,33 @@
   }
 
   function buildTaskRow(t) {
-    var row = el('div', 'row task');
-    row.dataset.id = t.id;
+    return buildGroupRow(t, 'task');
+  }
+
+  /* Riga principale di un'attività o di una persona. Il primo periodo
+     usa i campi della riga; i periodi aggiuntivi hanno righe rientrate. */
+  function buildGroupRow(g, kind) {
+    var isPerson = kind === 'person';
+    var row = el('div', 'row ' + (isPerson ? 'person' : 'task'));
+    row.dataset.id = g.id;
+    row.dataset.kind = kind;
     row.innerHTML =
       '<div class="fields">' +
-        '<div class="cell cell-name">' + DRAG_HANDLE + '<input class="inp inp-name" data-field="name" maxlength="120" aria-label="Nome attività" spellcheck="false" placeholder="Nome attività"></div>' +
+        '<div class="cell cell-name">' + DRAG_HANDLE +
+          (isPerson ? '<span class="row-kind" title="Persona">' + PERSON_SVG + '</span>' : '') +
+          '<input class="inp inp-name" data-field="name" maxlength="120" aria-label="' + (isPerson ? 'Nome persona' : 'Nome attività') + '" spellcheck="false" placeholder="' + (isPerson ? 'Nome persona' : 'Nome attività') + '">' +
+          '<button type="button" class="add-slot-btn" data-action="add-slot" title="Aggiungi un altro periodo di date per questa ' + (isPerson ? 'persona' : 'attività') + '" aria-label="Aggiungi un periodo">' + PLUS_SVG + '</button>' +
+        '</div>' +
         '<div class="cell cell-dur"><input class="inp inp-num" data-field="duration" type="number" min="1" max="' + MAX_DURATION + '" step="1" aria-label="Durata in giorni" title="Durata stimata in giorni"></div>' +
         '<div class="cell cell-start">' +
-          '<input class="inp inp-date" data-field="start" type="date" aria-label="Data di inizio">' +
-          '<span class="lock" aria-hidden="true"><svg viewBox="0 0 16 16"><rect x="3.2" y="7" width="9.6" height="6.6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0V7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></span>' +
+          '<input class="inp inp-date" data-field="start" type="date" aria-label="Data di inizio">' + LOCK_SVG +
         '</div>' +
         '<div class="cell cell-end">' +
-          '<input class="inp inp-date" data-field="end" type="date" aria-label="Data di fine">' +
-          '<span class="lock" aria-hidden="true"><svg viewBox="0 0 16 16"><rect x="3.2" y="7" width="9.6" height="6.6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0V7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></span>' +
+          '<input class="inp inp-date" data-field="end" type="date" aria-label="Data di fine">' + LOCK_SVG +
         '</div>' +
         '<div class="cell cell-pred">' +
           '<div class="link-line">' +
-            '<select class="inp inp-select inp-pred" data-field="pred" aria-label="Attività a cui collegare questa" title="Nessun collegamento"></select>' +
+            '<select class="inp inp-select inp-pred" data-field="pred" aria-label="' + (isPerson ? 'Persona o periodo a cui collegare questo' : 'Attività o periodo a cui collegare questo') + '" title="Nessun collegamento"></select>' +
           '</div>' +
           '<div class="link-line">' +
             '<select class="inp inp-select inp-link" data-field="link" aria-label="Tipo di vincolo" title="Tipo di vincolo"></select>' +
@@ -1137,19 +1359,19 @@
           '<label class="flag" title="Considera i festivi italiani nella durata: se non spuntato, i festivi vengono saltati"><input type="checkbox" data-field="countHol" aria-label="Considera i festivi nella durata"><span>Fest</span></label>' +
         '</div>' +
         '<div class="cell cell-act">' +
-          '<button type="button" class="icon-btn" data-action="duplicate" title="Duplica attività" aria-label="Duplica attività"><svg viewBox="0 0 16 16"><rect x="5.2" y="5.2" width="8" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.4 3.4H5.2a2 2 0 0 0-2 2v5.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>' +
-          '<button type="button" class="icon-btn danger" data-action="delete" title="Elimina attività" aria-label="Elimina attività"><svg viewBox="0 0 16 16"><path d="M3.4 4.6h9.2M6.2 4.6V3.2h3.6v1.4M4.6 4.6l.6 8.2h5.6l.6-8.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
+          '<button type="button" class="icon-btn" data-action="duplicate" title="Duplica" aria-label="Duplica"><svg viewBox="0 0 16 16"><rect x="5.2" y="5.2" width="8" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.4 3.4H5.2a2 2 0 0 0-2 2v5.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>' +
+          '<button type="button" class="icon-btn danger" data-action="delete" title="Elimina" aria-label="Elimina"><svg viewBox="0 0 16 16"><path d="M3.4 4.6h9.2M6.2 4.6V3.2h3.6v1.4M4.6 4.6l.6 8.2h5.6l.6-8.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
         '</div>' +
       '</div>' +
-      '<div class="timeline"><div class="lane"><div class="bar"></div>' + LINK_POINTS + '</div></div>';
-    var select = row.querySelector('[data-field="pred"]');
-    buildPredOptions(select, t);
+      '<div class="timeline"><div class="lane"></div></div>';
+    var node = nodeById(g.id);
+    buildPredOptions(row.querySelector('[data-field="pred"]'), node);
     var linkSel = row.querySelector('[data-field="link"]');
     LINK_ORDER.forEach(function (k) { linkSel.appendChild(new Option(LINK_TYPES[k].label, k)); });
-    linkSel.value = t.link;
+    linkSel.value = g.link;
     var pop = row.querySelector('.swatch-pop');
     var colors = SWATCHES.slice();
-    if (colors.indexOf(t.color) < 0) colors.unshift(t.color);
+    if (colors.indexOf(g.color) < 0) colors.unshift(g.color);
     colors.forEach(function (c) {
       var b = el('button', 'swatch');
       b.type = 'button';
@@ -1162,8 +1384,58 @@
     return row;
   }
 
-  var DRAG_HANDLE = '<button type="button" class="drag-handle" tabindex="-1" title="Trascina per spostare l’attività sopra o sotto le altre (oppure Alt+↑/↓ sul nome)" aria-hidden="true">' +
+  /* Riga rientrata di un periodo aggiuntivo: si modifica qui, ma la barra
+     viene disegnata nella stessa riga del grafico della riga principale. */
+  function buildSlotRow(owner, slot, index) {
+    var kind = groupKind(owner);
+    var isPerson = kind === 'person';
+    var row = el('div', 'row slot');
+    row.dataset.id = owner.id;
+    row.dataset.slot = slot.id;
+    row.dataset.kind = kind;
+    row.innerHTML =
+      '<div class="fields">' +
+        '<div class="cell cell-name slot-name">' +
+          '<span class="slot-connector" aria-hidden="true">↳</span>' +
+          '<span class="slot-label">Periodo ' + (index + 2) + '</span>' +
+          '<span class="slot-sub">date aggiuntive</span>' +
+        '</div>' +
+        '<div class="cell cell-dur"><input class="inp inp-num" data-field="duration" type="number" min="1" max="' + MAX_DURATION + '" step="1" aria-label="Durata in giorni" title="Durata stimata in giorni"></div>' +
+        '<div class="cell cell-start">' +
+          '<input class="inp inp-date" data-field="start" type="date" aria-label="Data di inizio del periodo">' + LOCK_SVG +
+        '</div>' +
+        '<div class="cell cell-end">' +
+          '<input class="inp inp-date" data-field="end" type="date" aria-label="Data di fine del periodo">' + LOCK_SVG +
+        '</div>' +
+        '<div class="cell cell-pred">' +
+          '<div class="link-line">' +
+            '<select class="inp inp-select inp-pred" data-field="pred" aria-label="' + (isPerson ? 'Persona o periodo a cui collegare questo' : 'Attività o periodo a cui collegare questo') + '" title="Nessun collegamento"></select>' +
+          '</div>' +
+          '<div class="link-line">' +
+            '<select class="inp inp-select inp-link" data-field="link" aria-label="Tipo di vincolo" title="Tipo di vincolo"></select>' +
+            '<input class="inp inp-lag" data-field="lag" type="number" min="0" max="365" step="1" placeholder="0" title="Offset in giorni" aria-label="Offset in giorni">' +
+          '</div>' +
+        '</div>' +
+        '<div class="cell cell-color"><span class="slot-color" title="Colore condiviso con la riga principale"></span></div>' +
+        '<div class="cell cell-flags"><span class="slot-note" title="Sab / Dom / Fest sono quelli della riga principale">condiviso</span></div>' +
+        '<div class="cell cell-act">' +
+          '<button type="button" class="icon-btn danger" data-action="delete-slot" title="Rimuovi questo periodo" aria-label="Rimuovi questo periodo"><svg viewBox="0 0 16 16"><path d="M3.4 4.6h9.2M6.2 4.6V3.2h3.6v1.4M4.6 4.6l.6 8.2h5.6l.6-8.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="timeline"><div class="lane"></div></div>';
+    buildPredOptions(row.querySelector('[data-field="pred"]'), nodeById(slot.id));
+    var linkSel = row.querySelector('[data-field="link"]');
+    LINK_ORDER.forEach(function (k) { linkSel.appendChild(new Option(LINK_TYPES[k].label, k)); });
+    linkSel.value = slot.link;
+    var dot = row.querySelector('.slot-color');
+    if (dot) dot.style.background = owner.color;
+    return row;
+  }
+
+  var DRAG_HANDLE = '<button type="button" class="drag-handle" tabindex="-1" title="Trascina per spostare la riga sopra o sotto le altre (oppure Alt+↑/↓ sul nome)" aria-hidden="true">' +
     '<svg viewBox="0 0 8 14"><circle cx="2" cy="2.5" r="1.1"/><circle cx="6" cy="2.5" r="1.1"/><circle cx="2" cy="7" r="1.1"/><circle cx="6" cy="7" r="1.1"/><circle cx="2" cy="11.5" r="1.1"/><circle cx="6" cy="11.5" r="1.1"/></svg></button>';
+  var PLUS_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+  var PERSON_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="5.2" r="2.6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2.9 13.4c.5-2.6 2.6-4.2 5.1-4.2s4.6 1.6 5.1 4.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
   var LINK_POINTS =
     '<span class="link-pt link-pt-start" data-pt="start" title="Inizio: trascina sull’inizio o sulla fine di un’altra attività per creare un vincolo"></span>' +
     '<span class="link-pt link-pt-end" data-pt="end" title="Fine: trascina sull’inizio o sulla fine di un’altra attività per creare un vincolo"></span>' +
@@ -1207,7 +1479,7 @@
         '</div>' +
       '</div>' +
       '<div class="timeline"><div class="lane"><div class="bar"></div>' + LINK_POINTS + '</div></div>';
-    buildPredOptions(row.querySelector('[data-field="pred"]'), t);
+    buildPredOptions(row.querySelector('[data-field="pred"]'), nodeById(t.id));
     var linkSel = row.querySelector('[data-field="link"]');
     LINK_ORDER.forEach(function (k) { linkSel.appendChild(new Option(LINK_TYPES[k].label, k)); });
     linkSel.value = t.link;
@@ -1287,31 +1559,39 @@
     });
   }
 
-  function buildPredOptions(select, t) {
+  function buildPredOptions(select, node) {
     select.textContent = '';
     select.appendChild(new Option('—', ''));
-    tasks().forEach(function (p) {
-      if (p.id === t.id) return;
-      if (wouldCycle(t.id, p.id)) return;
-      select.appendChild(new Option(taskLabel(p), p.id));
+    if (!node) return;
+    ganttNodes(node.kind).forEach(function (cand) {
+      if (cand.obj.id === node.obj.id) return;
+      if (wouldCycle(node.obj.id, cand.obj.id)) return;
+      select.appendChild(new Option(nodeLabel(cand), cand.obj.id));
     });
-    select.value = t.predecessorId || '';
+    select.value = node.obj.predecessorId || '';
   }
 
-  /* Etichetta di un'attività nei menu: nel tempo ciclo è preceduta dal numero. */
+  /* Etichetta di un nodo nei menu: nel tempo ciclo è preceduta dal numero;
+     per i periodi aggiuntivi viene indicato «periodo N». */
+  function nodeLabel(node) {
+    if (!node) return '';
+    var name = node.owner.name || 'Senza nome';
+    var base = isCycle() ? (indexById(node.owner.id) + 1) + ' · ' + name : name;
+    return node.slotIndex > 0 ? base + ' · periodo ' + (node.slotIndex + 1) : base;
+  }
+
   function taskLabel(t) {
+    if (!t) return '';
     var name = t.name || 'Senza nome';
     return isCycle() ? (indexById(t.id) + 1) + ' · ' + name : name;
   }
 
   function updateOptionLabels() {
-    grid.querySelectorAll('.row.task').forEach(function (row) {
-      var select = row.querySelector('[data-field="pred"]');
-      if (!select) return;
+    grid.querySelectorAll('[data-field="pred"]').forEach(function (select) {
       Array.prototype.forEach.call(select.options, function (opt) {
         if (!opt.value) return;
-        var t = taskById(opt.value);
-        if (t) opt.textContent = taskLabel(t);
+        var n = nodeById(opt.value);
+        if (n) opt.textContent = nodeLabel(n);
       });
     });
     renderCycleCalc();
@@ -1347,7 +1627,7 @@
   function onLinkDragStart(e) {
     var pt = e.target.closest ? e.target.closest('.link-pt') : null;
     if (!pt || e.button !== 0) return;
-    var row = pt.closest('.row.task');
+    var row = pt.closest('.row.task, .row.person');
     if (!row) return;
     e.preventDefault();
     e.stopPropagation();
@@ -1362,7 +1642,8 @@
     grid.appendChild(svg);
     var label = el('div', 'link-drag-label');
     grid.appendChild(label);
-    linkDrag = { id: row.dataset.id, pt: pt.dataset.pt, el: pt, svg: svg, path: path, label: label, target: null };
+    var nodeId = pt.dataset.node || row.dataset.id;
+    linkDrag = { id: nodeId, rowId: row.dataset.id, pt: pt.dataset.pt, el: pt, svg: svg, path: path, label: label, target: null };
     pt.classList.add('source');
     grid.classList.add('linking');
     document.body.classList.add('link-dragging');
@@ -1370,27 +1651,51 @@
     updateLinkDrag(e.clientX, e.clientY);
   }
 
-  /* Trova il punto di aggancio sotto il cursore: un punto, oppure l'estremo più vicino di una barra. */
+  /* Trova il punto di aggancio sotto il cursore: un punto, oppure l'estremo
+     più vicino della barra del periodo su cui si trova il cursore. */
   function linkTargetAt(x, y) {
     var node = document.elementFromPoint(x, y);
     if (!node || !node.closest) return null;
     if (node.closest('.fields')) return null;
-    var row = node.closest('.row.task');
-    if (!row || row.dataset.id === linkDrag.id) return null;
+    var row = node.closest('.row.task, .row.person');
+    if (!row) return null;
     var pt = node.closest('.link-pt');
     if (!pt) {
-      var bar = node.closest('.bar') || row.querySelector('.bar');
+      var bar = node.closest('.bar') || nearestBar(row, x, y);
+      if (!bar) return null;
       var r = bar.getBoundingClientRect();
       if (!node.closest('.bar') && (x < r.left - 18 || x > r.right + 18)) return null;
-      pt = row.querySelector(x < r.left + r.width / 2 ? '.link-pt-start' : '.link-pt-end');
+      pt = barPart(row, bar.dataset.node, x < r.left + r.width / 2 ? 'link-pt-start' : 'link-pt-end');
     }
-    return pt ? { id: row.dataset.id, pt: pt.dataset.pt, el: pt } : null;
+    return pt ? { id: row.dataset.id, node: pt.dataset.node || row.dataset.id, pt: pt.dataset.pt, el: pt } : null;
+  }
+
+  /* Barra della riga più vicina al cursore (una riga può contenere più periodi). */
+  function nearestBar(row, x, y) {
+    var best = null, bestDist = Infinity;
+    row.querySelectorAll('.lane .bar').forEach(function (b) {
+      var r = b.getBoundingClientRect();
+      var dx = x < r.left ? r.left - x : (x > r.right ? x - r.right : 0);
+      var dy = y < r.top ? r.top - y : (y > r.bottom ? y - r.bottom : 0);
+      var d = dx + dy * 3;
+      if (d < bestDist) { bestDist = d; best = b; }
+    });
+    return best;
+  }
+
+  /* Elemento (barra, pallino, maniglia) di un periodo; nel tempo ciclo la riga ne ha uno solo. */
+  function barPart(row, nodeId, cls) {
+    if (nodeId) {
+      var hit = row.querySelector('.lane .' + cls + '[data-node="' + nodeId + '"]');
+      if (hit) return hit;
+    }
+    return row.querySelector('.lane .' + cls);
   }
 
   function linkDescription(rel) {
-    var dep = taskById(rel.dep), pred = taskById(rel.pred);
+    var dep = nodeById(rel.dep), pred = nodeById(rel.pred);
     if (!dep || !pred) return '';
-    var dn = taskLabel(dep), pn = taskLabel(pred);
+    var dn = nodeLabel(dep), pn = nodeLabel(pred);
     if (rel.link === 'FS') return '«' + dn + '» inizia dopo la fine di «' + pn + '»';
     if (rel.link === 'SS') return '«' + dn + '» inizia con «' + pn + '»';
     return isCycle()
@@ -1410,7 +1715,7 @@
     if (target) {
       var c = pointCenter(target.el);
       bx = c.x; by = c.y;
-      var rel = linkFromPoints(d.id, d.pt, target.id, target.pt);
+      var rel = linkFromPoints(d.id, d.pt, target.node, target.pt);
       valid = !wouldCycle(rel.dep, rel.pred);
       target.el.classList.add('target');
       target.el.classList.toggle('invalid', !valid);
@@ -1449,12 +1754,13 @@
     if (d.target) d.target.el.classList.remove('target', 'invalid');
     grid.classList.remove('linking');
     document.body.classList.remove('link-dragging');
-    if (d.target) createLink(linkFromPoints(d.id, d.pt, d.target.id, d.target.pt));
+    if (d.target) createLink(linkFromPoints(d.id, d.pt, d.target.node, d.target.pt));
   }
 
   function createLink(rel) {
-    var dep = taskById(rel.dep), pred = taskById(rel.pred);
-    if (!dep || !pred || dep === pred) return;
+    var depN = nodeById(rel.dep), predN = nodeById(rel.pred);
+    if (!depN || !predN || depN.obj === predN.obj) return;
+    var dep = depN.obj, pred = predN.obj;
     if (wouldCycle(dep.id, pred.id)) {
       toast('Vincolo non possibile: creerebbe un ciclo tra le attività.', { type: 'error' });
       return;
@@ -1463,16 +1769,17 @@
       toast('Questo vincolo esiste già.');
       return;
     }
-    var old = dep.predecessorId ? taskById(dep.predecessorId) : null;
+    var old = dep.predecessorId ? nodeById(dep.predecessorId) : null;
     var snapshot = JSON.stringify(tasks());
+    var peopleSnapshot = JSON.stringify(people());
     var projectAt = state.project;
     var sheetAt = isCycle() ? state.project.activeSheet : null;
     dep.predecessorId = pred.id;
     dep.link = rel.link;
     dep.lag = 0;
-    state.selectedId = dep.id;
+    state.selectedId = depN.owner.id;
     var msg = 'Vincolo creato: ' + linkDescription(rel) + '.' +
-      (old && old.id !== pred.id ? ' Sostituisce il collegamento con «' + (old.name || 'attività') + '».' : '');
+      (old && old.obj.id !== pred.id ? ' Sostituisce il collegamento con «' + nodeLabel(old) + '».' : '');
     renderAll();
     toast(msg, {
       actionLabel: 'Annulla',
@@ -1485,6 +1792,7 @@
         }
         try {
           setTasks(JSON.parse(snapshot));
+          if (!isCycle()) state.project.people = JSON.parse(peopleSnapshot);
           renderAll();
           toast('Vincolo annullato.');
         } catch (err) { /* ignore */ }
@@ -1509,23 +1817,26 @@
     if (e.button !== 0 || linkDrag || rowDrag) return;
     var hit = e.target.closest ? e.target.closest('.bar, .move-grip') : null;
     if (!hit) return;
-    var row = hit.closest('.row.task');
-    var t = row ? taskById(row.dataset.id) : null;
-    if (!t) return;
+    var row = hit.closest('.row.task, .row.person');
+    var nodeId = hit.dataset.node || (row ? row.dataset.id : null);
+    var n = nodeId ? nodeById(nodeId) : null;
+    if (!n) return;
     e.preventDefault();
     closeColorPops(null);
     if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
-    selectTask(t.id);
-    var bar = row.querySelector('.bar');
+    selectTask(n.owner.id, n.obj.id);
+    var bar = barPart(row, hit.dataset.node, 'bar');
     var lane = row.querySelector('.lane');
     moveDrag = {
-      id: t.id,
+      nodeId: n.obj.id,
+      ownerId: n.owner.id,
       row: row,
       lane: lane,
       grab: e.clientX - bar.getBoundingClientRect().left,
       startX: e.clientX,
       moved: false,
       snapshot: JSON.stringify(tasks()),
+      peopleSnapshot: JSON.stringify(people()),
       projectAt: state.project,
       sheetAt: isCycle() ? state.project.activeSheet : null,
       lockRange: isCycle() || !range ? null : { start: range.start, end: range.end },
@@ -1552,7 +1863,8 @@
 
   /* Applica l'inizio desiderato; restituisce true se il vincolo ha limitato lo spostamento. */
   function applyMove(t, want) {
-    var p = t.predecessorId ? taskById(t.predecessorId) : null;
+    var pNode = t.predecessorId ? nodeById(t.predecessorId) : null;
+    var p = pNode ? pNode.obj : null;
     if (isCycle()) {
       if (!p) { t.start = want; t.end = round1(want + t.duration); return false; }
       var lagS = t.link === 'SS' ? want - p.start : (t.link === 'FF' ? p.end - want - t.duration : want - p.end);
@@ -1569,14 +1881,14 @@
     return lag < 0 || lag > 365;
   }
 
-  function moveInfo(t, clamped) {
-    var p = t.predecessorId ? taskById(t.predecessorId) : null;
+  function moveInfo(node, clamped) {
+    var p = node.predecessorId ? nodeById(node.predecessorId) : null;
     var txt = isCycle()
-      ? fmtSec(t.start) + ' → ' + fmtSec(t.end)
-      : fmtShort(t.start) + ' → ' + fmtShort(t.end);
+      ? fmtSec(node.start) + ' → ' + fmtSec(node.end)
+      : fmtShort(node.start) + ' → ' + fmtShort(node.end);
     if (p) {
-      txt += ' · offset ' + (isCycle() ? fmtSec(t.lag) : t.lag + ' gg');
-      if (clamped) txt += ' · limite del vincolo «' + LINK_TYPES[t.link].label + '» con «' + (p.name || 'attività') + '»';
+      txt += ' · offset ' + (isCycle() ? fmtSec(node.lag) : node.lag + ' gg');
+      if (clamped) txt += ' · limite del vincolo «' + LINK_TYPES[node.link].label + '» con «' + (p.owner.name || 'attività') + '»';
     }
     return txt;
   }
@@ -1592,8 +1904,9 @@
 
   function updateMoveDrag(clientX, clientY) {
     var d = moveDrag;
-    var t = taskById(d.id);
-    if (!t) return;
+    var n = nodeById(d.nodeId);
+    if (!n) return;
+    var t = n.obj;
     var want = moveTargetAt(clientX);
     if (want === null) return;
     var key = String(want);
@@ -1638,10 +1951,13 @@
     if (d.label) d.label.remove();
     d.row.classList.remove('moving');
     document.body.classList.remove('bar-moving');
-    var t = taskById(d.id);
-    if (!t || d.snapshot === JSON.stringify(tasks())) { renderAll(); return; }
+    var n = nodeById(d.nodeId);
+    if (!n) { renderAll(); return; }
+    var t = n.obj;
+    if (d.snapshot === JSON.stringify(tasks()) && d.peopleSnapshot === JSON.stringify(people())) { renderAll(); return; }
     keepDateInPlace(t.start, renderAll);
-    toast('«' + (t.name || 'Attività') + '» spostata: ' + moveInfo(t, false) + '.', {
+    var label = (n.owner.name || 'Attività') + (n.slotIndex > 0 ? ' · periodo ' + (n.slotIndex + 1) : '');
+    toast('«' + label + '» spostata: ' + moveInfo(t, false) + '.', {
       actionLabel: 'Annulla',
       duration: 7000,
       onAction: function () {
@@ -1652,6 +1968,7 @@
         }
         try {
           setTasks(JSON.parse(d.snapshot));
+          if (!isCycle()) state.project.people = JSON.parse(d.peopleSnapshot);
           renderAll();
           toast('Spostamento annullato.');
         } catch (err) { /* ignore */ }
@@ -1666,9 +1983,11 @@
     if (!modalEl.hidden || (typeModalEl && !typeModalEl.hidden)) return;
     var a = document.activeElement;
     if (a && (a.tagName === 'INPUT' || a.tagName === 'SELECT' || a.tagName === 'TEXTAREA' || a.isContentEditable)) return;
-    if (!state.selectedId || !taskById(state.selectedId)) return;
+    if (!state.selectedId || !groupById(state.selectedId)) return;
     e.preventDefault();
-    deleteTask(state.selectedId);
+    var sn = state.selectedNode ? nodeById(state.selectedNode) : null;
+    if (sn && sn.slotIndex > 0 && sn.owner.id === state.selectedId) deleteSlot(sn.owner.id, sn.obj.id);
+    else deleteGroup(state.selectedId);
   }
 
   /* ---------------- calcolo del tempo ciclo tra due fini ---------------- */
@@ -1805,12 +2124,18 @@
     saveSoon();
   }
 
-  /* ---------------- riordino delle attività (trascinamento) ---------------- */
+  /* ---------------- riordino delle righe (trascinamento) ---------------- */
   var rowDrag = null;
 
-  function moveTask(id, toIndex) {
-    var list = tasks();
-    var from = indexById(id);
+  function groupIndex(kind, id) {
+    var list = groupList(kind);
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return i;
+    return -1;
+  }
+
+  function moveGroup(kind, id, toIndex) {
+    var list = groupList(kind);
+    var from = groupIndex(kind, id);
     if (from < 0) return false;
     toIndex = Math.max(0, Math.min(list.length - 1, toIndex));
     if (toIndex === from) return false;
@@ -1821,10 +2146,30 @@
     return true;
   }
 
+  function moveTask(id, toIndex) {
+    return moveGroup('task', id, toIndex);
+  }
+
+  function moveSlot(ownerId, slotId, delta) {
+    var g = groupById(ownerId);
+    if (!g) return false;
+    var list = slotsOf(g);
+    var from = -1;
+    for (var i = 0; i < list.length; i++) if (list[i].id === slotId) { from = i; break; }
+    if (from < 0) return false;
+    var to = Math.max(0, Math.min(list.length - 1, from + delta));
+    if (to === from) return false;
+    var item = list.splice(from, 1)[0];
+    list.splice(to, 0, item);
+    state.selectedId = ownerId;
+    renderAll();
+    return true;
+  }
+
   function onRowDragStart(e) {
     var handle = e.target.closest ? e.target.closest('.drag-handle') : null;
     if (!handle || e.button !== 0) return;
-    var row = handle.closest('.row.task');
+    var row = handle.closest('.row.task, .row.person');
     if (!row) return;
     e.preventDefault();
     e.stopPropagation();
@@ -1832,7 +2177,16 @@
     if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
     var line = el('div', 'drop-line');
     grid.appendChild(line);
-    rowDrag = { id: row.dataset.id, row: row, line: line, target: indexById(row.dataset.id), moved: false, startY: e.clientY };
+    var kind = row.dataset.kind || 'task';
+    rowDrag = {
+      kind: kind,
+      id: row.dataset.id,
+      row: row,
+      line: line,
+      target: groupIndex(kind, row.dataset.id),
+      moved: false,
+      startY: e.clientY
+    };
     row.classList.add('dragging');
     document.body.classList.add('row-dragging');
     selectTask(row.dataset.id);
@@ -1841,7 +2195,9 @@
 
   /* Calcola la posizione di inserimento in base al cursore e mostra la linea guida. */
   function updateRowDrag(clientY) {
-    var rows = Array.prototype.slice.call(grid.querySelectorAll('.row.task'));
+    if (!rowDrag) return;
+    var sel = rowDrag.kind === 'person' ? '.row.person' : '.row.task';
+    var rows = Array.prototype.slice.call(grid.querySelectorAll(sel));
     if (!rows.length) return;
     var slot = rows.length;
     for (var i = 0; i < rows.length; i++) {
@@ -1851,7 +2207,7 @@
     var gridTop = grid.getBoundingClientRect().top;
     var ref = slot < rows.length ? rows[slot].getBoundingClientRect().top : rows[rows.length - 1].getBoundingClientRect().bottom;
     rowDrag.line.style.top = (ref - gridTop - 1) + 'px';
-    var from = indexById(rowDrag.id);
+    var from = groupIndex(rowDrag.kind, rowDrag.id);
     var target = slot > from ? slot - 1 : slot;
     rowDrag.target = target;
     rowDrag.line.classList.toggle('noop', target === from);
@@ -1875,91 +2231,123 @@
     d.row.classList.remove('dragging');
     d.line.remove();
     document.body.classList.remove('row-dragging');
-    if (d.moved && moveTask(d.id, d.target)) {
-      var t = taskById(d.id);
-      toast('«' + (t && t.name ? t.name : 'Attività') + '» spostata in posizione ' + (d.target + 1) + '.');
+    if (d.moved && moveGroup(d.kind, d.id, d.target)) {
+      var g = groupById(d.id);
+      toast('«' + (g && g.name ? g.name : (d.kind === 'person' ? 'Persona' : 'Attività')) +
+        '» spostata in posizione ' + (d.target + 1) + '.');
     }
+  }
+
+  function rowNode(row) {
+    var owner = groupById(row.dataset.id);
+    if (!owner) return null;
+    var kind = row.dataset.kind || groupKind(owner);
+    var slotId = row.dataset.slot;
+    if (!slotId) return { obj: owner, owner: owner, kind: kind, slotIndex: 0, slot: null };
+    var slots = slotsOf(owner);
+    for (var i = 0; i < slots.length; i++) {
+      if (slots[i].id === slotId) return { obj: slots[i], owner: owner, kind: kind, slotIndex: i + 1, slot: slots[i] };
+    }
+    return null;
   }
 
   function syncRows() {
     if (isCycle()) { syncCycleRows(); return; }
-    var rows = grid.querySelectorAll('.row.task');
+    var rows = grid.querySelectorAll('.row.task, .row.person, .row.slot');
     rows.forEach(function (row) {
-      var t = taskById(row.dataset.id);
-      if (!t) return;
-      setInput(row.querySelector('[data-field="name"]'), t.name);
-      setInput(row.querySelector('[data-field="duration"]'), t.duration);
-      setInput(row.querySelector('[data-field="start"]'), t.start);
-      setInput(row.querySelector('[data-field="end"]'), t.end);
-      setInput(row.querySelector('[data-field="lag"]'), t.lag);
+      var n = rowNode(row);
+      if (!n) return;
+      var o = n.obj;
+      var g = n.owner;
+      var isSlot = !!row.dataset.slot;
+
+      if (!isSlot) setInput(row.querySelector('[data-field="name"]'), g.name);
+      setInput(row.querySelector('[data-field="duration"]'), o.duration);
+      setInput(row.querySelector('[data-field="start"]'), o.start);
+      setInput(row.querySelector('[data-field="end"]'), o.end);
+      setInput(row.querySelector('[data-field="lag"]'), o.lag);
 
       var predSel = row.querySelector('[data-field="pred"]');
-      if (document.activeElement !== predSel && predSel.value !== (t.predecessorId || '')) predSel.value = t.predecessorId || '';
-      var predTask = t.predecessorId ? taskById(t.predecessorId) : null;
-      predSel.title = predTask ? 'Collegata a «' + predTask.name + '»' : 'Nessun collegamento';
-
-      var linkSel = row.querySelector('[data-field="link"]');
-      if (document.activeElement !== linkSel && linkSel.value !== t.link) linkSel.value = t.link;
-      linkSel.disabled = !t.predecessorId;
-      linkSel.title = predTask ? 'Tipo di vincolo con «' + predTask.name + '»' : 'Scegli prima un’attività collegata';
-
-      var lag = row.querySelector('[data-field="lag"]');
-      lag.disabled = !t.predecessorId;
-      if (!t.predecessorId) {
-        lag.title = 'Offset in giorni: disponibile con un collegamento';
-      } else if (t.link === 'SS') {
-        lag.title = 'Offset in giorni tra l’inizio di questa attività e l’inizio di quella collegata';
-      } else if (t.link === 'FF') {
-        lag.title = 'Giorni prima della fine dell’attività collegata in cui questa si conclude';
-      } else {
-        lag.title = 'Giorni di attesa dopo la fine dell’attività collegata';
+      if (predSel) {
+        if (document.activeElement !== predSel && predSel.value !== (o.predecessorId || '')) predSel.value = o.predecessorId || '';
+        var predNode = o.predecessorId ? nodeById(o.predecessorId) : null;
+        predSel.title = predNode ? 'Collegata a «' + nodeLabel(predNode) + '»' : 'Nessun collegamento';
       }
 
-      var dot = row.querySelector('.swatch-dot');
-      if (dot) dot.style.background = t.color;
-      var colorBtn = row.querySelector('[data-action="color"]');
-      if (colorBtn) colorBtn.title = 'Colore ' + t.color + ' — clicca per sceglierne un altro';
-      row.querySelectorAll('.swatch').forEach(function (b) {
-        b.classList.toggle('on', b.dataset.color === t.color);
-      });
+      var linkSel = row.querySelector('[data-field="link"]');
+      if (linkSel) {
+        if (document.activeElement !== linkSel && linkSel.value !== o.link) linkSel.value = o.link;
+        linkSel.disabled = !o.predecessorId;
+        linkSel.title = predNode ? 'Tipo di vincolo con «' + nodeLabel(predNode) + '»' : 'Scegli prima un periodo collegato';
+      }
 
-      ['countSat', 'countSun', 'countHol'].forEach(function (f) {
-        var cb = row.querySelector('[data-field="' + f + '"]');
-        if (cb && document.activeElement !== cb) cb.checked = t[f] === true;
-      });
+      var lag = row.querySelector('[data-field="lag"]');
+      if (lag) {
+        lag.disabled = !o.predecessorId;
+        if (!o.predecessorId) {
+          lag.title = 'Offset in giorni: disponibile con un collegamento';
+        } else if (o.link === 'SS') {
+          lag.title = 'Offset in giorni tra l’inizio di questo periodo e l’inizio di quello collegato';
+        } else if (o.link === 'FF') {
+          lag.title = 'Giorni prima della fine del periodo collegato in cui questo si conclude';
+        } else {
+          lag.title = 'Giorni di attesa dopo la fine del periodo collegato';
+        }
+      }
+
+      if (!isSlot) {
+        var dot = row.querySelector('.swatch-dot');
+        if (dot) dot.style.background = g.color;
+        var colorBtn = row.querySelector('[data-action="color"]');
+        if (colorBtn) colorBtn.title = 'Colore ' + g.color + ' — clicca per sceglierne un altro';
+        row.querySelectorAll('.swatch').forEach(function (b) {
+          b.classList.toggle('on', b.dataset.color === g.color);
+        });
+        ['countSat', 'countSun', 'countHol'].forEach(function (f) {
+          var cb = row.querySelector('[data-field="' + f + '"]');
+          if (cb && document.activeElement !== cb) cb.checked = g[f] === true;
+        });
+      } else {
+        var sdot = row.querySelector('.slot-color');
+        if (sdot) sdot.style.background = g.color;
+      }
 
       var startInput = row.querySelector('[data-field="start"]');
       var endInput = row.querySelector('[data-field="end"]');
-      var lockedStart = !!t.predecessorId;
-      var lockedEnd = !!t.predecessorId && t.link === 'FF';
-      var lockTitle = t.link === 'SS'
-        ? 'Data calcolata: mantiene la stessa distanza dall’inizio dell’attività collegata'
-        : (t.link === 'FF'
-          ? 'Data calcolata: finisce prima della fine dell’attività collegata'
-          : 'Data calcolata: inizia dopo la fine dell’attività collegata');
+      var lockedStart = !!o.predecessorId;
+      var lockedEnd = !!o.predecessorId && o.link === 'FF';
+      var lockTitle = o.link === 'SS'
+        ? 'Data calcolata: mantiene la stessa distanza dall’inizio del periodo collegato'
+        : (o.link === 'FF'
+          ? 'Data calcolata: finisce prima della fine del periodo collegato'
+          : 'Data calcolata: inizia dopo la fine del periodo collegato');
       [['start', startInput, lockedStart], ['end', endInput, lockedEnd]].forEach(function (pair) {
         var inp = pair[1];
+        if (!inp) return;
         inp.disabled = pair[2];
         inp.classList.toggle('locked', pair[2]);
         inp.title = pair[2] ? lockTitle : '';
-        inp.closest(pair[0] === 'start' ? '.cell-start' : '.cell-end').classList.toggle('locked', pair[2]);
+        var cell = inp.closest(pair[0] === 'start' ? '.cell-start' : '.cell-end');
+        if (cell) cell.classList.toggle('locked', pair[2]);
       });
     });
   }
 
   function setInput(input, value) {
     if (!input) return;
-    if (document.activeElement === input) return;
+    /* non sovrascrive il campo in cui si sta scrivendo, ma aggiorna sempre
+       quelli bloccati da un vincolo (possono restare col fuoco dopo il blocco) */
+    if (document.activeElement === input && !input.disabled) return;
     var v = String(value);
     if (input.value !== v) input.value = v;
   }
 
   function computeRange() {
-    var list = tasks();
+    var list = ganttNodes();
     var min = null, max = null;
-    list.forEach(function (t) {
-      if (!min || t.start < min) min = t.start;
-      if (!max || t.end > max) max = t.end;
+    list.forEach(function (n) {
+      if (!min || n.obj.start < min) min = n.obj.start;
+      if (!max || n.obj.end > max) max = n.obj.end;
     });
     if (!min) {
       var t0 = todayISO();
@@ -2160,48 +2548,125 @@
     if (!range) return;
     if (!timeMap) buildTimeMap();
     var px = timeMap.px;
-    var rows = {};
-    grid.querySelectorAll('.row.task').forEach(function (r) { rows[r.dataset.id] = r; });
-    tasks().forEach(function (t) {
-      var row = rows[t.id];
+    var rowMap = {};
+    grid.querySelectorAll('.row.task, .row.person').forEach(function (r) { rowMap[r.dataset.id] = r; });
+    groupList().forEach(function (g) {
+      var row = rowMap[g.id];
       if (!row) return;
-      var bar = row.querySelector('.bar');
-      var x0 = xOf(t.start);
-      var x1 = xOf(addDays(t.end, 1));
-      var w = Math.max(4, x1 - x0 - 2);
-      var maxLeft = Math.max(0, timeMap.count * px - 4);
-      bar.style.left = Math.min(x0 + 1, maxLeft) + 'px';
-      placeLinkPoints(row, Math.min(x0 + 1, maxLeft), w);
-      bar.style.width = w + 'px';
-      bar.style.background = t.color;
-      bar.classList.toggle('light', isLight(t.color));
-      bar.classList.toggle('selected', t.id === state.selectedId);
-      bar.classList.toggle('linked', !!t.predecessorId);
-      bar.textContent = '';
-      if (w >= 54) bar.appendChild(el('span', 'bar-name', t.name || 'Senza nome'));
-      if (w >= 118) bar.appendChild(el('span', 'bar-days', t.duration + 'g'));
-      var pred = t.predecessorId ? taskById(t.predecessorId) : null;
-      bar.title = (t.name || 'Senza nome') + '\n' + fmtLong(t.start) + ' → ' + fmtLong(t.end) +
-        '  (' + t.duration + (t.duration === 1 ? ' giorno' : ' giorni') + ')' +
-        (pred ? '\n' + LINK_TYPES[t.link].label + ': ' + pred.name + (t.lag ? ' (offset ' + t.lag + ' gg)' : '') : '');
+      var lane = row.querySelector('.lane');
+      if (!lane) return;
+      lane.textContent = '';
+      var nodes = [{ obj: g, slotIndex: 0, slot: null }];
+      slotsOf(g).forEach(function (s, i) { nodes.push({ obj: s, slotIndex: i + 1, slot: s }); });
+      /* tutti i periodi sulla stessa riga; solo quelli sovrapposti nel tempo
+         vengono affiancati su sotto-linee */
+      var tracks = assignTracks(nodes.map(function (n) { return n.obj; }));
+      var each = ROW_H / tracks.count;
+      var barH = Math.max(6, Math.min(25, each - 3));
+      nodes.forEach(function (n, i) {
+        var o = n.obj;
+        var cy = (tracks.track[i] + 0.5) * each;
+        nodeTrackY[o.id] = cy - ROW_H / 2;
+        var wrap = lane;
+        var bar = el('div', 'bar' + (n.slotIndex > 0 ? ' slot-extra' : ''));
+        bar.dataset.node = o.id;
+        bar.style.height = barH + 'px';
+        bar.style.top = cy + 'px';
+        if (barH < 16) bar.classList.add('thin');
+        var x0 = xOf(o.start);
+        var x1 = xOf(addDays(o.end, 1));
+        var w = Math.max(4, x1 - x0 - 2);
+        var left = Math.min(x0 + 1, Math.max(0, timeMap.count * px - 4));
+        bar.style.left = left + 'px';
+        bar.style.width = w + 'px';
+        bar.style.background = g.color;
+        bar.classList.toggle('light', isLight(g.color));
+        bar.classList.toggle('selected', g.id === state.selectedId && (!state.selectedNode || state.selectedNode === o.id));
+        bar.classList.toggle('linked', !!o.predecessorId);
+        bar.textContent = '';
+        if (w >= 54 && barH >= 12) bar.appendChild(el('span', 'bar-name', (n.slotIndex > 0 ? (n.slotIndex + 1) + '· ' : '') + (g.name || 'Senza nome')));
+        if (w >= 118 && barH >= 12) bar.appendChild(el('span', 'bar-days', o.duration + 'g'));
+        var pred = o.predecessorId ? nodeById(o.predecessorId) : null;
+        bar.title = (g.name || 'Senza nome') +
+          (n.slotIndex > 0 ? ' · periodo ' + (n.slotIndex + 1) : '') + '\n' +
+          fmtLong(o.start) + ' → ' + fmtLong(o.end) +
+          '  (' + o.duration + (o.duration === 1 ? ' giorno' : ' giorni') + ')' +
+          (pred ? '\n' + LINK_TYPES[o.link].label + ': ' + nodeLabel(pred) + (o.lag ? ' (offset ' + o.lag + ' gg)' : '') : '');
+        wrap.appendChild(bar);
+
+        var ps = el('span', 'link-pt link-pt-start');
+        ps.style.top = cy + 'px';
+        ps.dataset.pt = 'start';
+        ps.dataset.node = o.id;
+        ps.title = 'Inizio: trascina sull’inizio o sulla fine di un altro periodo per creare un vincolo';
+        ps.style.left = left + 'px';
+        var pe = el('span', 'link-pt link-pt-end');
+        pe.dataset.pt = 'end';
+        pe.dataset.node = o.id;
+        pe.title = 'Fine: trascina sull’inizio o sulla fine di un altro periodo per creare un vincolo';
+        pe.style.left = (left + w) + 'px';
+        pe.style.top = cy + 'px';
+        var grip = el('span', 'move-grip');
+        grip.style.top = cy + 'px';
+        grip.dataset.node = o.id;
+        grip.title = 'Trascina a destra o a sinistra per spostare questo periodo nel tempo (i vincoli si aggiornano)';
+        grip.innerHTML = '<svg viewBox="0 0 20 10" aria-hidden="true"><path d="M1.5 5h17M5 1.8 1.5 5 5 8.2M15 1.8 18.5 5 15 8.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        grip.style.left = (left + w / 2) + 'px';
+        wrap.appendChild(ps);
+        wrap.appendChild(pe);
+        wrap.appendChild(grip);
+      });
     });
   }
 
-  /* Connettori tra attività collegate; spanOf(t) restituisce [x inizio, x fine]. */
+  /* Posizione verticale di ogni periodo rispetto al centro della sua riga. */
+  var nodeTrackY = {};
+
+  /* Assegna i periodi a sotto-linee: quelli che non si sovrappongono
+     condividono la stessa linea. Restituisce { track: [indice per periodo], count }. */
+  function assignTracks(list) {
+    var order = list.map(function (o, i) { return i; });
+    order.sort(function (a, b) {
+      return list[a].start < list[b].start ? -1 : (list[a].start > list[b].start ? 1 : a - b);
+    });
+    var ends = [];
+    var track = new Array(list.length);
+    order.forEach(function (i) {
+      var o = list[i];
+      var t = 0;
+      while (t < ends.length && !(String(o.start) > String(ends[t]))) t++;
+      ends[t] = o.end;
+      track[i] = t;
+    });
+    return { track: track, count: Math.max(1, ends.length) };
+  }
+
+  /* Connettori tra periodi collegati; spanOf(node) restituisce [x inizio, x fine]. */
   function linkPaths(spanOf) {
     var out = '';
-    var idx = {};
-    tasks().forEach(function (t, i) { idx[t.id] = i; });
-    tasks().forEach(function (t) {
-      if (!t.predecessorId) return;
-      var p = taskById(t.predecessorId);
-      if (!p || idx[p.id] === undefined || idx[t.id] === undefined) return;
-      var ps = spanOf(p), ts = spanOf(t);
-      var x1 = t.link === 'SS' ? ps[0] : ps[1];
-      var x2 = t.link === 'FF' ? ts[1] : ts[0];
-      var y1 = idx[p.id] * ROW_H + ROW_H / 2;
-      var y2 = idx[t.id] * ROW_H + ROW_H / 2;
-      var dash = t.link === 'SS' ? ' stroke-dasharray="4 3"' : (t.link === 'FF' ? ' stroke-dasharray="2 3"' : '');
+    var nodes = ganttNodes();
+    var map = {};
+    nodes.forEach(function (n) { map[n.obj.id] = n; });
+    var headH = headerRow ? headerRow.offsetHeight : 54;
+    var yCache = {};
+    function yOf(ownerId) {
+      if (yCache[ownerId] !== undefined) return yCache[ownerId];
+      var row = grid.querySelector('.row.task[data-id="' + ownerId + '"], .row.person[data-id="' + ownerId + '"]');
+      var y = row ? (row.offsetTop - headH + row.offsetHeight / 2) : 0;
+      yCache[ownerId] = y;
+      return y;
+    }
+    nodes.forEach(function (n) {
+      var o = n.obj;
+      if (!o.predecessorId) return;
+      var p = map[o.predecessorId];
+      if (!p) return;
+      var ps = spanOf(p.obj), ts = spanOf(o);
+      var x1 = o.link === 'SS' ? ps[0] : ps[1];
+      var x2 = o.link === 'FF' ? ts[1] : ts[0];
+      var y1 = yOf(p.owner.id) + (isCycle() ? 0 : nodeTrackY[p.obj.id] || 0);
+      var y2 = yOf(n.owner.id) + (isCycle() ? 0 : nodeTrackY[o.id] || 0);
+      var dash = o.link === 'SS' ? ' stroke-dasharray="4 3"' : (o.link === 'FF' ? ' stroke-dasharray="2 3"' : '');
       var d;
       if (x2 - x1 >= 8) {
         var mid = x1 + Math.max(6, Math.min(14, (x2 - x1) / 2));
@@ -2381,7 +2846,9 @@
     if (!timeMap) buildTimeMap();
     var px = timeMap.px;
     var headH = headerRow ? headerRow.offsetHeight : 54;
-    var totalH = tasks().length * ROW_H;
+    var rowEls = grid.querySelectorAll('.row.task, .row.person, .row.slot');
+    var lastRow = rowEls.length ? rowEls[rowEls.length - 1] : null;
+    var totalH = lastRow ? Math.max(0, lastRow.offsetTop + lastRow.offsetHeight - headH) : 0;
     var width = timeMap.count * px;
     linksSvg.setAttribute('width', width);
     linksSvg.setAttribute('height', totalH);
@@ -2452,19 +2919,20 @@
 
   function updateStats() {
     if (isCycle()) { updateCycleStats(); return; }
-    var list = tasks();
-    var n = list.length;
+    var nodes = ganttNodes();
+    var taskCount = tasks().length;
+    var peopleCount = people().length;
     statsbar.textContent = '';
-    if (!n) {
+    if (!nodes.length) {
       statsbar.appendChild(el('span', 'stat', 'Nessuna attività: aggiungi la prima per iniziare.'));
       updateProjectMeta();
       return;
     }
     var min = null, max = null, total = 0;
-    list.forEach(function (t) {
-      if (!min || t.start < min) min = t.start;
-      if (!max || t.end > max) max = t.end;
-      total += t.duration;
+    nodes.forEach(function (n) {
+      if (!min || n.obj.start < min) min = n.obj.start;
+      if (!max || n.obj.end > max) max = n.obj.end;
+      total += n.obj.duration;
     });
     var span = diffDays(min, max) + 1;
     var links = countLinks();
@@ -2475,7 +2943,11 @@
       s.appendChild(document.createTextNode(' ' + label));
       statsbar.appendChild(s);
     }
-    stat(n, n === 1 ? 'attività' : 'attività');
+    stat(taskCount, taskCount === 1 ? 'attività' : 'attività');
+    if (peopleCount) {
+      statsbar.appendChild(el('span', 'dot'));
+      stat(peopleCount, peopleCount === 1 ? 'persona' : 'persone');
+    }
     statsbar.appendChild(el('span', 'dot'));
     stat(span, span === 1 ? 'giorno di calendario' : 'giorni di calendario');
     statsbar.appendChild(el('span', 'dot'));
@@ -2504,24 +2976,27 @@
       return;
     }
     var list = tasks();
-    if (!list.length) {
+    var ppl = people();
+    if (!list.length && !ppl.length) {
       projectMetaEl.textContent = 'Nessuna attività';
       return;
     }
     var min = null, max = null;
-    list.forEach(function (t) {
-      if (!min || t.start < min) min = t.start;
-      if (!max || t.end > max) max = t.end;
+    ganttNodes().forEach(function (n) {
+      if (!min || n.obj.start < min) min = n.obj.start;
+      if (!max || n.obj.end > max) max = n.obj.end;
     });
     var sameYear = min.slice(0, 4) === max.slice(0, 4);
     var rangeTxt = sameYear
       ? fmtShort(min) + ' – ' + fmtShort(max) + ' ' + max.slice(0, 4)
       : fmtShort(min) + ' ' + min.slice(0, 4) + ' – ' + fmtShort(max) + ' ' + max.slice(0, 4);
-    projectMetaEl.textContent = list.length + ' attività · ' + rangeTxt;
+    projectMetaEl.textContent = list.length + ' attività' +
+      (ppl.length ? ' · ' + ppl.length + (ppl.length === 1 ? ' persona' : ' persone') : '') +
+      ' · ' + rangeTxt;
   }
 
   function updateEmpty() {
-    var emptyNow = tasks().length === 0;
+    var emptyNow = groupList().length === 0;
     grid.hidden = emptyNow;
     emptyEl.hidden = !emptyNow;
     if (tlChip) tlChip.style.display = emptyNow ? 'none' : '';
@@ -2553,7 +3028,7 @@
     board.scrollTop = st;
     board.scrollLeft = sl;
     if (opts.focusId) {
-      var inp = grid.querySelector('.row.task[data-id="' + opts.focusId + '"] [data-field="name"]');
+      var inp = grid.querySelector('.row.task[data-id="' + opts.focusId + '"] [data-field="name"], .row.person[data-id="' + opts.focusId + '"] [data-field="name"]');
       if (inp) {
         try { inp.focus({ preventScroll: true }); } catch (e) { inp.focus(); }
         inp.select();
@@ -2594,7 +3069,7 @@
       tlChipText.textContent = (activeSheet() ? activeSheet().name + ' · ' : '') + 'da ' + fmtSec(round1(sec));
       return;
     }
-    if (!range || !timeMap || !timeMap.visible.length || !tasks().length) { tlChip.style.display = 'none'; return; }
+    if (!range || !timeMap || !timeMap.visible.length || !ganttNodes().length) { tlChip.style.display = 'none'; return; }
     tlChip.style.display = '';
     var px = timeMap.px;
     var idx = Math.floor(Math.max(0, board.scrollLeft) / px);
@@ -2660,14 +3135,22 @@
     saveSoon();
   }
 
-  function selectTask(id) {
+  /* Seleziona una riga; con `nodeId` evidenzia solo quel periodo
+     (Canc eliminerà allora solo il periodo, non l'intera riga). */
+  function selectTask(id, nodeId) {
     state.selectedId = id;
-    grid.querySelectorAll('.row.task').forEach(function (row) {
+    state.selectedNode = id && nodeId && nodeId !== id ? nodeId : null;
+    grid.querySelectorAll('.row.task, .row.person, .row.slot').forEach(function (row) {
       var on = row.dataset.id === id;
-      row.classList.toggle('selected', on);
-      var bar = row.querySelector('.bar');
-      if (bar) bar.classList.toggle('selected', on);
+      var isSlotRow = !!row.dataset.slot;
+      row.classList.toggle('selected', isSlotRow ? on && row.dataset.slot === state.selectedNode : on);
+      row.querySelectorAll('.bar').forEach(function (bar) { bar.classList.toggle('selected', isBarSelected(row, bar)); });
     });
+  }
+
+  function isBarSelected(row, bar) {
+    if (row.dataset.id !== state.selectedId) return false;
+    return !state.selectedNode || bar.dataset.node === state.selectedNode;
   }
 
   /* ============================================================
@@ -2731,6 +3214,21 @@
         countSun: src.countSun,
         countHol: src.countHol
       });
+      var slotMap = {};
+      slotsOf(src).forEach(function (s) {
+        var c = makeSlot({
+          start: s.start,
+          duration: s.duration,
+          predecessorId: s.predecessorId,
+          link: s.link,
+          lag: s.lag
+        });
+        slotMap[s.id] = c.id;
+        copy.slots.push(c);
+      });
+      copy.slots.forEach(function (c) {
+        if (c.predecessorId && slotMap[c.predecessorId]) c.predecessorId = slotMap[c.predecessorId];
+      });
     }
     tasks().splice(indexById(id) + 1, 0, copy);
     state.selectedId = copy.id;
@@ -2738,14 +3236,25 @@
     toast('Attività duplicata e collegata alla fine di «' + src.name + '».');
   }
 
+  function deleteGroup(id) {
+    var g = groupById(id);
+    if (!g) return;
+    if (groupKind(g) === 'person') deletePerson(id);
+    else deleteTask(id);
+  }
+
   function deleteTask(id) {
     var idx = indexById(id);
     if (idx < 0) return;
-    var name = tasks()[idx].name || 'Attività';
+    var g = tasks()[idx];
+    var name = g.name || 'Attività';
     var snapshot = JSON.stringify(tasks());
+    var dead = slotIdSet(g);
     tasks().splice(idx, 1);
     tasks().forEach(function (t) {
-      if (t.predecessorId === id) t.predecessorId = null;
+      [t].concat(slotsOf(t)).forEach(function (o) {
+        if (o.predecessorId && dead[o.predecessorId]) o.predecessorId = null;
+      });
     });
     if (state.selectedId === id) state.selectedId = null;
     var sheetAtDelete = isCycle() ? state.project.activeSheet : null;
@@ -2766,6 +3275,159 @@
           renderAll();
           toast('Attività ripristinata.');
         } catch (e) { /* ignore */ }
+      }
+    });
+  }
+
+  function deletePerson(id) {
+    var list = people();
+    var idx = -1;
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) { idx = i; break; }
+    if (idx < 0) return;
+    var g = list[idx];
+    var snapshot = JSON.stringify(list);
+    var dead = slotIdSet(g);
+    list.splice(idx, 1);
+    people().forEach(function (p) {
+      [p].concat(slotsOf(p)).forEach(function (o) {
+        if (o.predecessorId && dead[o.predecessorId]) o.predecessorId = null;
+      });
+    });
+    if (state.selectedId === id) state.selectedId = null;
+    var projectAtDelete = state.project;
+    renderAll();
+    toast('«' + (g.name || 'Persona') + '» eliminata', {
+      actionLabel: 'Annulla',
+      duration: 7000,
+      onAction: function () {
+        if (state.project !== projectAtDelete) return;
+        try {
+          state.project.people = JSON.parse(snapshot);
+          state.selectedId = id;
+          renderAll();
+          toast('Persona ripristinata.');
+        } catch (e) { /* ignore */ }
+      }
+    });
+  }
+
+  function addPerson() {
+    if (isCycle()) return;
+    if (people().length >= MAX_PEOPLE) {
+      toast('Limite di ' + MAX_PEOPLE + ' persone raggiunto.', { type: 'error' });
+      return;
+    }
+    var sel = groupById(state.selectedId);
+    var start = sel && groupKind(sel) === 'person' ? addDays(sel.end, 1) : todayISO();
+    var p = makePerson({ name: 'Nuova persona', start: start, duration: 3 });
+    people().push(p);
+    state.selectedId = p.id;
+    renderAll();
+    var row = grid.querySelector('.row.person[data-id="' + p.id + '"]');
+    if (row) {
+      try { row.scrollIntoView({ block: 'nearest' }); } catch (e) { /* ignore */ }
+      var inp = row.querySelector('[data-field="name"]');
+      if (inp) {
+        try { inp.focus({ preventScroll: true }); } catch (e2) { inp.focus(); }
+        inp.select();
+      }
+    }
+    toast('Persona aggiunta: imposta le date e, se serve, premi + per un secondo periodo.');
+  }
+
+  function duplicatePerson(id) {
+    var src = groupById(id);
+    if (!src || groupKind(src) !== 'person') return;
+    if (people().length >= MAX_PEOPLE) {
+      toast('Limite di ' + MAX_PEOPLE + ' persone raggiunto.', { type: 'error' });
+      return;
+    }
+    var copy = makePerson({
+      name: src.name + ' (copia)',
+      start: addDays(src.end, 1),
+      duration: src.duration,
+      color: src.color,
+      predecessorId: src.id,
+      lag: 0,
+      countSat: src.countSat,
+      countSun: src.countSun,
+      countHol: src.countHol
+    });
+    var slotMap = {};
+    slotsOf(src).forEach(function (s) {
+      var c = makeSlot({
+        start: s.start,
+        duration: s.duration,
+        predecessorId: s.predecessorId,
+        link: s.link,
+        lag: s.lag
+      });
+      slotMap[s.id] = c.id;
+      copy.slots.push(c);
+    });
+    copy.slots.forEach(function (c) {
+      if (c.predecessorId && slotMap[c.predecessorId]) c.predecessorId = slotMap[c.predecessorId];
+    });
+    people().splice(people().indexOf(src) + 1, 0, copy);
+    state.selectedId = copy.id;
+    renderAll({ focusId: copy.id });
+    toast('Persona duplicata e collegata alla fine di «' + src.name + '».');
+  }
+
+  function addSlot(ownerId) {
+    if (isCycle()) return;
+    var g = groupById(ownerId);
+    if (!g) return;
+    if (slotsOf(g).length >= MAX_SLOTS) {
+      toast('Limite di ' + MAX_SLOTS + ' periodi per riga raggiunto.', { type: 'error' });
+      return;
+    }
+    var last = g;
+    slotsOf(g).forEach(function (s) { if (s.end > last.end) last = s; });
+    var s = makeSlot({ start: addDays(last.end, 1), duration: g.duration });
+    g.slots.push(s);
+    state.selectedId = g.id;
+    renderAll();
+    var row = grid.querySelector('.row.slot[data-slot="' + s.id + '"]');
+    if (row) {
+      try { row.scrollIntoView({ block: 'nearest' }); } catch (e) { /* ignore */ }
+      var inp = row.querySelector('[data-field="start"]');
+      if (inp && !inp.disabled) {
+        try { inp.focus({ preventScroll: true }); } catch (e2) { inp.focus(); }
+      }
+    }
+    toast('Periodo ' + (g.slots.length + 1) + ' aggiunto a «' + (g.name || 'riga') + '»: imposta inizio e fine.');
+  }
+
+  function deleteSlot(ownerId, slotId) {
+    var g = groupById(ownerId);
+    if (!g) return;
+    var list = slotsOf(g);
+    var idx = -1;
+    for (var i = 0; i < list.length; i++) if (list[i].id === slotId) { idx = i; break; }
+    if (idx < 0) return;
+    var snapTasks = JSON.stringify(tasks());
+    var snapPeople = JSON.stringify(people());
+    var projectAt = state.project;
+    list.splice(idx, 1);
+    groupList(groupKind(g)).forEach(function (grp) {
+      [grp].concat(slotsOf(grp)).forEach(function (o) {
+        if (o.predecessorId === slotId) o.predecessorId = null;
+      });
+    });
+    if (state.selectedNode === slotId) state.selectedNode = null;
+    renderAll();
+    toast('Periodo ' + (idx + 2) + ' rimosso da «' + (g.name || 'riga') + '».', {
+      actionLabel: 'Annulla',
+      duration: 7000,
+      onAction: function () {
+        if (state.project !== projectAt) return;
+        try {
+          state.project.tasks = JSON.parse(snapTasks);
+          state.project.people = JSON.parse(snapPeople);
+          renderAll();
+          toast('Periodo ripristinato.');
+        } catch (err) { /* ignore */ }
       }
     });
   }
@@ -3215,7 +3877,7 @@
     saveNow();
     var payload = {
       format: 'ganttflow-project',
-      version: 4,
+      version: 5,
       exportedAt: new Date().toISOString(),
       project: state.project
     };
@@ -3254,11 +3916,14 @@
         var count = projectTaskCount(p);
         if (p.type !== 'cycle' && !count) throw new Error('Il file non contiene attività.');
         setProject(p);
-        scrollToDate(tasks()[0] ? tasks()[0].start : todayISO());
+        var firstGroup = p.type === 'cycle' ? tasks()[0] : groupList()[0];
+        scrollToDate(firstGroup ? firstGroup.start : todayISO());
         saveNow();
+        var extraPeople = p.type === 'cycle' ? 0 : (Array.isArray(p.people) ? p.people.length : 0);
         toast(p.type === 'cycle'
           ? 'Tempo ciclo «' + p.name + '» importato: ' + p.sheets.length + (p.sheets.length === 1 ? ' pagina, ' : ' pagine, ') + count + ' attività.'
-          : 'Progetto «' + p.name + '» importato: ' + count + ' attività.');
+          : 'Progetto «' + p.name + '» importato: ' + p.tasks.length + ' attività' +
+            (extraPeople ? ' e ' + extraPeople + (extraPeople === 1 ? ' persona' : ' persone') : '') + '.');
       } catch (err) {
         toast(err && err.message ? err.message : 'File non valido.', { type: 'error' });
       }
@@ -3373,52 +4038,54 @@
     var input = e.target;
     var field = input.dataset ? input.dataset.field : null;
     if (!field) return;
-    var row = input.closest('.row.task');
+    var row = input.closest('.row.task, .row.person, .row.slot');
     if (!row) return;
-    var t = taskById(row.dataset.id);
-    if (!t) return;
+    var n = rowNode(row);
+    if (!n) return;
+    var o = n.obj;
+    var g = n.owner;
 
     if (field === 'name') {
-      if (t.sourceSheetId) return;
-      t.name = input.value.slice(0, 120);
+      if (isCycle() && g.sourceSheetId) return;
+      g.name = input.value.slice(0, 120);
       updateOptionLabels();
       renderBars();
       saveSoon();
       return;
     }
-    if (isCycle()) { onCycleInput(t, field, input); return; }
+    if (isCycle()) { onCycleInput(o, field, input); return; }
     if (field === 'duration') {
       var dur = parseInt(input.value, 10);
       if (!Number.isFinite(dur) || dur < 1) return;
-      t.duration = Math.min(MAX_DURATION, dur);
+      o.duration = Math.min(MAX_DURATION, dur);
       afterEdit();
       return;
     }
     if (field === 'start') {
-      if (t.predecessorId) return;
+      if (o.predecessorId) return;
       if (!isISO(input.value)) return;
-      t.start = input.value;
+      o.start = input.value;
       afterEdit();
       return;
     }
     if (field === 'end') {
       if (!isISO(input.value)) return;
-      var end = prevCounted(input.value, t);
-      var d = countDays(t.start, end, t);
+      var end = prevCounted(input.value, g);
+      var d = countDays(o.start, end, g);
       if (d < 1) {
         toast('L’intervallo scelto non contiene giorni considerati: controlla le spunte Sab/Dom/Fest.', { type: 'error' });
         syncRows();
         return;
       }
       if (d > MAX_DURATION) d = MAX_DURATION;
-      t.duration = d;
-      t.end = endFromStart(t.start, d, t);
+      o.duration = d;
+      o.end = endFromStart(o.start, d, g);
       afterEdit();
       return;
     }
     if (field === 'lag') {
       var lag = parseInt(input.value, 10);
-      t.lag = Number.isFinite(lag) && lag > 0 ? Math.min(365, lag) : 0;
+      o.lag = Number.isFinite(lag) && lag > 0 ? Math.min(365, lag) : 0;
       afterEdit();
       return;
     }
@@ -3428,40 +4095,42 @@
     var input = e.target;
     var field = input.dataset ? input.dataset.field : null;
     if (!field) return;
-    var row = input.closest('.row.task');
+    var row = input.closest('.row.task, .row.person, .row.slot');
     if (!row) return;
-    var t = taskById(row.dataset.id);
-    if (!t) return;
+    var n = rowNode(row);
+    if (!n) return;
+    var o = n.obj;
+    var g = n.owner;
 
     if (field === 'pred') {
       var val = input.value || null;
-      if (val && wouldCycle(t.id, val)) {
-        toast('Collegamento non possibile: creerebbe un ciclo tra le attività.', { type: 'error' });
+      if (val && wouldCycle(o.id, val)) {
+        toast('Collegamento non possibile: creerebbe un ciclo tra i periodi.', { type: 'error' });
         syncRows();
         return;
       }
-      t.predecessorId = val;
+      o.predecessorId = val;
       afterEdit();
       return;
     }
     if (field === 'link') {
-      t.link = LINK_TYPES[input.value] ? input.value : 'FS';
+      o.link = LINK_TYPES[input.value] ? input.value : 'FS';
       afterEdit();
       return;
     }
     if (field === 'countSat' || field === 'countSun' || field === 'countHol') {
-      t[field] = input.checked === true;
+      g[field] = input.checked === true;
       afterEdit();
       return;
     }
     if (isCycle() && (field === 'duration' || field === 'start' || field === 'end' || field === 'lag')) {
       if (field === 'end') {
         var ev = parseFloat(String(input.value).replace(',', '.'));
-        if (Number.isFinite(ev) && round1(ev - t.start) < 0.1) {
-          toast('La fine deve essere successiva all’inizio (' + fmtSec(t.start) + ').', { type: 'error' });
+        if (Number.isFinite(ev) && round1(ev - o.start) < 0.1) {
+          toast('La fine deve essere successiva all’inizio (' + fmtSec(o.start) + ').', { type: 'error' });
         }
       }
-      input.value = secText(t[field]);
+      input.value = secText(o[field]);
       return;
     }
     if (field === 'duration') {
@@ -3500,19 +4169,25 @@
     if (actionBtn) {
       var action = actionBtn.dataset.action;
       if (action === 'add') { addTask(); return; }
-      var row = actionBtn.closest('.row.task');
+      if (action === 'add-person') { addPerson(); return; }
+      var slotRow = actionBtn.closest('.row.slot');
+      if (action === 'delete-slot' && slotRow) { deleteSlot(slotRow.dataset.id, slotRow.dataset.slot); return; }
+      var row = actionBtn.closest('.row.task, .row.person');
       if (!row) return;
-      if (action === 'delete') deleteTask(row.dataset.id);
-      else if (action === 'duplicate') duplicateTask(row.dataset.id);
-      else if (action === 'color') toggleColorPop(row);
+      if (action === 'add-slot') addSlot(row.dataset.id);
+      else if (action === 'delete') deleteGroup(row.dataset.id);
+      else if (action === 'duplicate') {
+        if ((row.dataset.kind || 'task') === 'person') duplicatePerson(row.dataset.id);
+        else duplicateTask(row.dataset.id);
+      } else if (action === 'color') toggleColorPop(row);
       return;
     }
     var swatch = e.target.closest('.swatch');
     if (swatch) {
-      var swRow = swatch.closest('.row.task');
-      var swTask = swRow ? taskById(swRow.dataset.id) : null;
-      if (swTask && hexColor(swatch.dataset.color)) {
-        swTask.color = swatch.dataset.color;
+      var swRow = swatch.closest('.row.task, .row.person');
+      var swGroup = swRow ? groupById(swRow.dataset.id) : null;
+      if (swGroup && hexColor(swatch.dataset.color)) {
+        swGroup.color = swatch.dataset.color;
         closeColorPops(null);
         renderBars();
         syncRows();
@@ -3522,8 +4197,8 @@
     }
     var bar = e.target.closest('.bar');
     if (bar) {
-      var barRow = bar.closest('.row.task');
-      if (barRow) selectTask(barRow.dataset.id);
+      var barRow = bar.closest('.row.task, .row.person');
+      if (barRow) selectTask(barRow.dataset.id, bar.dataset.node);
     }
   }
 
@@ -3536,11 +4211,20 @@
     }
     var bar = e.target.closest('.bar');
     if (!bar) return;
-    var row = bar.closest('.row.task');
+    var row = bar.closest('.row.task, .row.person');
     if (!row) return;
-    selectTask(row.dataset.id);
-    var inp = row.querySelector('[data-field="name"]');
-    if (inp) { inp.focus(); inp.select(); }
+    selectTask(row.dataset.id, bar.dataset.node);
+    var target = null;
+    var n = bar.dataset.node ? nodeById(bar.dataset.node) : null;
+    if (n && n.slotIndex > 0) {
+      var slotRow = grid.querySelector('.row.slot[data-slot="' + n.obj.id + '"]');
+      if (slotRow) target = slotRow.querySelector('[data-field="start"]');
+    }
+    if (!target) target = row.querySelector('[data-field="name"]');
+    if (target && !target.disabled) {
+      try { target.focus({ preventScroll: true }); } catch (err) { target.focus(); }
+      target.select();
+    }
   }
 
   function bindEvents() {
@@ -3574,18 +4258,28 @@
     document.addEventListener('mouseup', onSplitUp);
     window.addEventListener('blur', onSplitUp);
     grid.addEventListener('focusin', function (e) {
-      var row = e.target.closest('.row.task');
-      if (row) selectTask(row.dataset.id);
+      var row = e.target.closest('.row.task, .row.person, .row.slot');
+      if (row) selectTask(row.dataset.id, row.dataset.slot || null);
     });
     grid.addEventListener('keydown', function (e) {
       if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
-        var kRow = e.target.closest('.row.task');
+        var kRow = e.target.closest('.row.task, .row.person, .row.slot');
         if (!kRow) return;
         e.preventDefault();
-        var kId = kRow.dataset.id;
+        var dir = e.key === 'ArrowUp' ? -1 : 1;
         var field = e.target.dataset ? e.target.dataset.field : null;
-        if (moveTask(kId, indexById(kId) + (e.key === 'ArrowUp' ? -1 : 1))) {
-          var again = grid.querySelector('.row.task[data-id="' + kId + '"] [data-field="' + (field || 'name') + '"]');
+        if (kRow.classList.contains('slot')) {
+          var sId = kRow.dataset.slot;
+          if (moveSlot(kRow.dataset.id, sId, dir)) {
+            var sAgain = grid.querySelector('.row.slot[data-slot="' + sId + '"] [data-field="' + (field || 'start') + '"]');
+            if (sAgain && !sAgain.disabled) { try { sAgain.focus({ preventScroll: false }); } catch (err) { sAgain.focus(); } }
+          }
+          return;
+        }
+        var kId = kRow.dataset.id;
+        var kind = kRow.dataset.kind || 'task';
+        if (moveGroup(kind, kId, groupIndex(kind, kId) + dir)) {
+          var again = grid.querySelector('.row.' + kind + '[data-id="' + kId + '"] [data-field="' + (field || 'name') + '"]');
           if (again && !again.disabled) { try { again.focus({ preventScroll: false }); } catch (err) { again.focus(); } }
         }
         return;
@@ -3779,7 +4473,8 @@
     requestAnimationFrame(function () {
       if (isCycle()) { renderAll(); return; }
       var t0 = todayISO();
-      var focusDate = tasks().length ? tasks()[0].start : t0;
+      var firstGroup = groupList()[0];
+      var focusDate = firstGroup ? firstGroup.start : t0;
       if (range && (focusDate < range.start || focusDate > range.end)) focusDate = t0;
       scrollToDate(focusDate);
       updateMonthChip();
